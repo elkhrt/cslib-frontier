@@ -4005,6 +4005,7 @@ public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.I
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.InSpace.Justesen
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.InSpace.JustesenBit
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.InSpace.ListSlice
+public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.InSpace.Midpoint
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.InSpace.NatPow
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.InSpace.NatPrime
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.InSpace.NatSize
