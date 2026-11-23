@@ -4198,7 +4198,6 @@ public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.S
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.Space.Decode
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.Space.PebblingWords
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.Space.Reachability
-public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.Space.Reachability.Bounds
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.Space.Savitch
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.Space.SavitchWalk
 public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.SpaceInTime
