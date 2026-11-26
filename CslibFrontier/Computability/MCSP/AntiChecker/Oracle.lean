@@ -200,7 +200,7 @@ theorem encQuery_ofSamples_one_zero_notMem_antiCheckerOracle_iff {n s : ℕ}
     rw [mem_consistent] at hw
     exact ⟨_, certificateFunction_mem_computableFunctions hw.1, hw.2⟩
   · rintro ⟨g, hg, hP⟩
-    rw [← mem_coe, ← image_validCertificates] at hg
+    rw [← image_validCertificates] at hg
     obtain ⟨w, hw, rfl⟩ := hg
     exact ⟨w, mem_consistent.2 ⟨mem_coe.1 hw, hP⟩⟩
 
