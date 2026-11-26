@@ -245,7 +245,7 @@ theorem WL.el_one (h3 : 3 ≤ h) (i j : Fin h) (hij : i ≠ j) :
   have he2 : 2 ^ e ≤ 2 * (n + 1) := by
     rcases Nat.eq_zero_or_pos n with rfl | hn
     · simp [e]
-    · have := Nat.pow_pred_clog_lt_self (b := 2) (by omega) (show 1 < n + 1 by omega)
+    · have := Nat.pow_pred_clog_lt_self 2 (show 1 < n + 1 by omega)
       obtain ⟨c, hc'⟩ := Nat.exists_eq_add_of_lt
         (Nat.clog_pos (b := 2) (by omega) (show 1 < n + 1 by omega))
       dsimp only [e]

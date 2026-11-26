@@ -168,7 +168,7 @@ theorem two_pow_clog_succ_le_two_mul {n : ℕ} (hn : 1 ≤ n) :
   have h1 : 1 < n + 1 := by omega
   have hpos : 1 ≤ Nat.clog 2 (n + 1) := Nat.clog_pos Nat.one_lt_two h1
   have hlt : 2 ^ (Nat.clog 2 (n + 1) - 1) < n + 1 :=
-    Nat.pow_pred_clog_lt_self Nat.one_lt_two h1
+    Nat.pow_pred_clog_lt_self 2 h1
   rw [← Nat.sub_add_cancel hpos, pow_succ']
   omega
 

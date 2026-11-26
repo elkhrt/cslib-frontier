@@ -345,7 +345,7 @@ theorem exists_kappa_le (hμ : 2 ≤ μ) (hs : 1 ≤ s) (hsm : s ^ 2 < μ) :
   have hni : n ≤ 2 ^ i := Nat.le_pow_clog one_lt_two n
   have hi2 : 2 ^ i ≤ 2 * n := by
     have hi0 : 0 < i := Nat.clog_pos one_lt_two (by omega)
-    have h : 2 ^ i.pred < n := Nat.pow_pred_clog_lt_self one_lt_two (by omega)
+    have h : 2 ^ i.pred < n := Nat.pow_pred_clog_lt_self 2 (by omega)
     rw [← Nat.succ_pred_eq_of_pos hi0, pow_succ']; omega
   have hLL : L₀ ≤ L := Nat.le_log_of_pow_le (by omega) (by omega)
   have hiL : (i : ℝ) ≤ μ * ((L : ℝ) + 1) := by
