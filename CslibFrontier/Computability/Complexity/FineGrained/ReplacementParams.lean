@@ -654,7 +654,9 @@ private theorem eventually_thresholds {β : ℕ} :
             linarith
         _ ≤ lam := hnu_sqrt.le
     exact_mod_cast hprod_r
-  have h2pow_n : 2 ^ (lam - 1) ≤ n := (Nat.pow_pred_clog_lt_self one_lt_two (by omega)).le
+  have h2pow_n : 2 ^ (lam - 1) ≤ n := by
+    have := (Nat.pow_pred_clog_lt_self 2 (show 1 < n by omega)).le
+    rwa [Nat.pred_eq_sub_one] at this
   have h16 : (16 : ℝ) ≤ Real.sqrt lam :=
     (Real.le_sqrt (by norm_num) (Nat.cast_nonneg _)).mpr (by exact_mod_cast hlam)
   have hβnu_le : β * nu + nu ≤ lam / 4 := by

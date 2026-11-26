@@ -583,7 +583,7 @@ private theorem exists_hard_graphFinset {p : ℕ} (hp : 4 ≤ p) :
     rw [card_image_of_injective _ hinj]
     simp [← pow_mul]
   have hfin := (computableFunctions (p + p) (2 ^ (p - 4))).toFinite
-  obtain ⟨f, hf, hhard⟩ := exists_mem_notMem_of_card_lt_card (s := hfin.toFinset)
+  obtain ⟨f, hf, hhard⟩ := exists_mem_notMem_of_card_lt_card (s := hfin.toFinset) (t := family)
     (by rw [← Set.ncard_eq_toFinset_card _ hfin, hcard]; exact card_computableFunctions_lt hp)
   obtain ⟨φ, -, rfl⟩ := mem_image.mp hf
   refine ⟨graphFinset φ, card_graphFinset φ, not_le.mp fun h => hhard (hfin.mem_toFinset.mpr ?_)⟩
