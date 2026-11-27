@@ -1,738 +1,742 @@
 /-
-Copyright (c) 2026 The CslibFrontier contributors. All rights reserved.
+Copyright (c) 2026 FormalPapers Contributors. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
-Authors: The CslibFrontier contributors
 -/
+
 module
+-- upstream: candidate
 
-public import CslibFrontier.Computability.Complexity.Problems.CSP.Basic
-public import CslibFrontier.Computability.Complexity.Reduction.Equiv
-public import CslibFrontier.Computability.Machines.Turing.MultiTape.Encodings.Sum
+public import CslibFrontier.Init
+public import CslibFrontier.Computability.Complexity.Problems.Coloring
+public import CslibFrontier.Computability.Complexity.Problems.TwoSAT.PolyTime
+public import CslibFrontier.Computability.Complexity.Reduction
+public import CslibFrontier.Logics.Polymorphism.Graph
 
-import CslibFrontier.Computability.Complexity.Classes.NP.Witness
-import CslibFrontier.Computability.Complexity.Problems.CSP.Schaefer
-import CslibFrontier.Computability.Complexity.Reduction.Guard
-import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Finite
+import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.BitString
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.List
+import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Membership
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat
-import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat.Binary
-import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Sum
-import CslibFrontier.Computability.Machines.Turing.MultiTape.Encodings.Finite
-import CslibFrontier.Foundations.Data.List.OfFnGetD
-import CslibFrontier.Logics.Polymorphism.BooleanClone
-import Mathlib.Data.Fintype.EquivFin
-import Mathlib.Data.List.FinRange
+import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Plain
+import CslibFrontier.Computability.Machines.Turing.MultiTape.Encodings.List.Size
+import CslibFrontier.Computability.Machines.Turing.MultiTape.Internal.EqualityPrimitives
 import Mathlib.Data.List.GetD
-import Mathlib.Data.List.OfFn
-import Mathlib.Tactic.FinCases
-import Mathlib.Tactic.Ring
 
 /-!
-# Finite-Domain Constraint Satisfaction Problems and Weak Near-Unanimity Polymorphisms
+# Finite-Domain CSP Instances, $H$-Coloring, `NP` Membership, and Bipartite Tractability
 
-This module generalizes fixed-template Constraint Satisfaction Problems (`CSP(Γ)`) from Boolean
-domains to arbitrary finite domains `D`, building directly on `Cslib.Logic.PL.CSP`,
-`Cslib.Logic.IsPolymorphism`, and the multi-tape Turing-machine complexity classes `P`, `NP`,
-`NPComplete`, `PolyTimeReducible`, and `PolyTimeEquiv` from `CslibFrontier`.
+This module introduces finite-domain single-relation constraint satisfaction problems `CSP(R)` and
+graph homomorphism problems `$H$-Coloring` on canonical `CslibFrontier` multi-tape Turing-machine
+encodings, together with:
+
+1. `NP` membership for every finite-domain `CSP(R)` and `$H$-Coloring`.
+2. Polynomial-time equivalence between `CSP(E_H)` and `$H$-Coloring` (for nonempty target vertex
+   sets).
+3. Polynomial-time decidability of `$H$-Coloring` for every bipartite simple graph $H$ (via 2-SAT).
+4. `NP`-completeness of `$K_V$-Coloring` for every finite vertex set $V$ with $|V| \ge 3$.
+5. Impossibility of `NP`-completeness for trivial `CSP(R)`.
 
 ## Main definitions
 
-* `CslibFrontier.Complexity.FiniteCSP.IsWeakNearUnanimity`: weak near-unanimity (WNU) operations
-  `f : (Fin m → A) → A` (`m ≥ 2` and `f(y, x, …, x) = f(x, y, …, x) = ⋯ = f(x, …, x, y)`).
-* `CslibFrontier.Complexity.FiniteCSP.Language`: fixed-arity constraint language `(arity, sem)` on
-  domain `D` indexed by relation alphabet `Rel`.
-* `CslibFrontier.Complexity.FiniteCSP.Language.withUnarySingletons`,
-  `CslibFrontier.Complexity.FiniteCSP.Language.withConstants`,
-  `CslibFrontier.Complexity.FiniteCSP.Language.power`: unary-singleton expansions, full constant
-  expansions `Γ*`, and direct-power constraint languages `Γ^m`.
-* `CslibFrontier.Complexity.FiniteCSP.Language.cspsat`: exact-arity decision problem `CSP(Γ)`.
-* `CslibFrontier.Complexity.FiniteCSP.Language.boolNAE3`: positive ternary Boolean not-all-equal
-  constraint language.
+* `Cslib.Complexity.CSPInstance`, `Cslib.Complexity.encTuple`,
+  `Cslib.Complexity.encCSPInstance`: finite-domain single-relation CSP instances and their
+  binary framed-list encoding.
+* `Cslib.Complexity.CSPRel`: the decision problem `CSP(R)`.
+* `Cslib.Complexity.HColoring`: the graph homomorphism problem `$H$-Coloring` on
+  `Cslib.Complexity.Graph`.
 
 ## Main results
 
-* `CslibFrontier.Complexity.FiniteCSP.npComplete_of_polyTimeEquiv`,
-  `CslibFrontier.Complexity.FiniteCSP.npComplete_iff_of_polyTimeEquiv`: invariance of
-  `NPComplete` under polynomial-time many-one equivalence.
-* `CslibFrontier.Complexity.FiniteCSP.Language.isPolymorphism_solutions`: polymorphisms of `Γ`
-  preserve solution sets of all well-formed conjunctive CSP formulas over `Γ`.
-* `CslibFrontier.Complexity.FiniteCSP.Language.withConstants_cspsat_polyTimeReducible`:
-  `CSP(Γ*) ≤_m^p CSP(Γ)` whenever `Γ` contains all constant relations.
-* `CslibFrontier.Complexity.FiniteCSP.Language.cspsat_mem_NP`: `CSP(Γ) ∈ NP` for every finite
-  nonempty domain `D` and finite relation alphabet `Rel`, via polynomial-time one-hot compilation
-  into Boolean `CSPSAT`.
-* `CslibFrontier.Complexity.FiniteCSP.Language.cspsat_mem_P_of_unaryConst`,
-  `CslibFrontier.Complexity.FiniteCSP.Language.cspsat_mem_P_of_subsingleton`: tractability under a
-  constant unary polymorphism and on 1-element domains.
-* `CslibFrontier.Complexity.FiniteCSP.Language.bool_admitsWNU_iff_hasSchaefer`,
-  `CslibFrontier.Complexity.FiniteCSP.Language.bool_cspsat_dichotomy`: equivalence of Boolean WNU
-  and Schaefer polymorphisms and the resulting Boolean WNU complexity dichotomy.
-* `CslibFrontier.Complexity.FiniteCSP.Language.not_admitsWNU_boolNAE3`,
-  `CslibFrontier.Complexity.FiniteCSP.Language.cspsat_npComplete_boolNAE3`: `NAE₃` admits no WNU
-  polymorphism and is `NP`-complete.
+* `Cslib.Complexity.CSPRel.mem_NP`, `Cslib.Complexity.HColoring.mem_NP`: `NP` membership.
+* `Cslib.Complexity.HColoring.mem_P_of_isBipartite`: bipartite `$H$-Coloring` is in `P`.
+* `Cslib.Complexity.HColoring.npComplete_top`: $K_V$-Coloring ($|V| \ge 3$) is `NP`-complete.
+* `Cslib.Complexity.CSPRel.polyTimeReducible_edgeRel_hColoring`,
+  `Cslib.Complexity.HColoring.polyTimeReducible_cspRel_edgeRel`: polynomial-time equivalence
+  between `CSP(E_H)` and `$H$-Coloring`.
+* `Cslib.Complexity.CSPRel.not_npComplete_of_trivial`: trivial `CSP(R)` is never `NP`-complete.
 -/
 
 public section
 
-namespace CslibFrontier.Complexity.FiniteCSP
+namespace Cslib.Complexity
 
-open Cslib.Complexity Cslib.Logic Cslib.Logic.PL Turing.MultiTapeTM
+open Cslib.Logic Cslib.Logic.SimpleGraph Cslib.Logic.PL Turing.MultiTapeTM ComputableInPolyTime
 
-universe u v w
+/-! ### Finite-domain single-relation CSP instances and encodings -/
 
-/-! ### Invariance of `NPComplete` under polynomial-time equivalence -/
+/-- An instance of `CSP(R)` for an `n`-ary relation `R` is a finite list of `n`-tuples of
+variables in `ℕ`. Every syntactic instance is well-formed. -/
+abbrev CSPInstance (n : ℕ) : Type := List (Fin n → ℕ)
 
-/-- `NP`-completeness transfers along polynomial-time many-one equivalence. -/
-theorem npComplete_of_polyTimeEquiv {α β : Type} {encA : α ↪ List Bool} {encB : β ↪ List Bool}
-    {A : Set α} {B : Set β} (heq : PolyTimeEquiv encA encB A B) (hB : NPComplete encB B) :
-    NPComplete encA A :=
-  ⟨heq.mem_NP_iff.mpr hB.1, hB.2.trans heq.2⟩
+/-- Binary framed-list encoding of a fixed-arity variable tuple `Fin n → ℕ`. -/
+@[expose] def encTuple (n : ℕ) : (Fin n → ℕ) ↪ List Bool where
+  toFun t := encList encNat (List.ofFn t)
+  inj' _ _ h := List.ofFn_injective ((encList encNat).injective h)
 
-/-- Two polynomial-time many-one equivalent problems are simultaneously `NP`-complete or not. -/
-theorem npComplete_iff_of_polyTimeEquiv {α β : Type} {encA : α ↪ List Bool}
-    {encB : β ↪ List Bool} {A : Set α} {B : Set β} (heq : PolyTimeEquiv encA encB A B) :
-    NPComplete encA A ↔ NPComplete encB B :=
-  ⟨npComplete_of_polyTimeEquiv heq.symm, npComplete_of_polyTimeEquiv heq⟩
+/-- Binary encoding of a `CSPInstance n` as a framed list of encoded tuples. -/
+def encCSPInstance (n : ℕ) : CSPInstance n ↪ List Bool :=
+  encList (encTuple n)
 
-/-! ### Weak near-unanimity (WNU) operations -/
+/-- Raw list representation of a `CSPInstance n`. -/
+@[expose] def CSPInstance.toRaw {n : ℕ} (I : CSPInstance n) : List (List ℕ) :=
+  I.map List.ofFn
 
-/-- An operation `f : (Fin m → A) → A` is a *weak near-unanimity* (WNU) operation if `m ≥ 2` and
-`f(y, x, …, x) = f(x, y, …, x) = ⋯ = f(x, …, x, y)` for all `x y : A`. -/
-def IsWeakNearUnanimity {A : Type u} {m : ℕ} (f : (Fin m → A) → A) : Prop :=
-  2 ≤ m ∧ ∀ (x y : A) (i j : Fin m),
-    f (Function.update (fun _ ↦ x) i y) = f (Function.update (fun _ ↦ x) j y)
+/-- Reconstruct a `CSPInstance n` from raw lists of variables (padding/truncating via `getD`). -/
+@[expose] def CSPInstance.ofRaw (n : ℕ) (L : List (List ℕ)) : CSPInstance n :=
+  L.map fun l i => l.getD i.val 0
 
-theorem isWeakNearUnanimity_iff {A : Type u} {m : ℕ} (f : (Fin m → A) → A) :
-    IsWeakNearUnanimity f ↔
-      2 ≤ m ∧ ∀ (x y : A) (i j : Fin m),
-        f (Function.update (fun _ ↦ x) i y) = f (Function.update (fun _ ↦ x) j y) :=
-  Iff.rfl
-
-theorem IsWeakNearUnanimity.two_le {A : Type u} {m : ℕ} {f : (Fin m → A) → A}
-    (hf : IsWeakNearUnanimity f) : 2 ≤ m :=
-  hf.1
-
-theorem IsWeakNearUnanimity.pos {A : Type u} {m : ℕ} {f : (Fin m → A) → A}
-    (hf : IsWeakNearUnanimity f) : 0 < m :=
-  lt_of_lt_of_le Nat.zero_lt_two hf.1
-
-theorem IsWeakNearUnanimity.update_eq {A : Type u} {m : ℕ} {f : (Fin m → A) → A}
-    (hf : IsWeakNearUnanimity f) (x y : A) (i j : Fin m) :
-    f (Function.update (fun _ ↦ x) i y) = f (Function.update (fun _ ↦ x) j y) :=
-  hf.2 x y i j
-
-/-- Any constant operation of arity `m ≥ 2` is a WNU operation. -/
-theorem isWeakNearUnanimity_const {A : Type u} {m : ℕ} (hm : 2 ≤ m) (c : A) :
-    IsWeakNearUnanimity (fun _ : Fin m → A ↦ c) :=
-  ⟨hm, fun _ _ _ _ ↦ rfl⟩
-
-/-- Any commutative binary operation defines a 2-ary WNU operation. -/
-theorem isWeakNearUnanimity_binary_of_comm {A : Type u} (op : A → A → A)
-    (hcomm : ∀ x y, op x y = op y x) :
-    IsWeakNearUnanimity (fun a : Fin 2 → A ↦ op (a 0) (a 1)) := by
-  rw [isWeakNearUnanimity_iff]
-  refine ⟨le_rfl, fun x y i j ↦ ?_⟩
-  fin_cases i <;> fin_cases j <;> simp [hcomm]
-
-/-- Any ternary majority operation is a WNU operation. -/
-theorem isWeakNearUnanimity_of_majority {A : Type u} {f : (Fin 3 → A) → A}
-    (h0 : ∀ x y, f ![y, x, x] = x) (h1 : ∀ x y, f ![x, y, x] = x)
-    (h2 : ∀ x y, f ![x, x, y] = x) :
-    IsWeakNearUnanimity f := by
-  have hval : ∀ (x y : A) (i : Fin 3), f (Function.update (fun _ ↦ x) i y) = x := by
-    intro x y i
-    fin_cases i
-    · convert h0 x y; ext k; fin_cases k <;> rfl
-    · convert h1 x y; ext k; fin_cases k <;> rfl
-    · convert h2 x y; ext k; fin_cases k <;> rfl
-  exact ⟨by omega, fun x y i j ↦ (hval x y i).trans (hval x y j).symm⟩
-
-/-- Any ternary minority operation is a WNU operation. -/
-theorem isWeakNearUnanimity_of_minority {A : Type u} {f : (Fin 3 → A) → A}
-    (h0 : ∀ x y, f ![y, x, x] = y) (h1 : ∀ x y, f ![x, y, x] = y)
-    (h2 : ∀ x y, f ![x, x, y] = y) :
-    IsWeakNearUnanimity f := by
-  have hval : ∀ (x y : A) (i : Fin 3), f (Function.update (fun _ ↦ x) i y) = y := by
-    intro x y i
-    fin_cases i
-    · convert h0 x y; ext k; fin_cases k <;> rfl
-    · convert h1 x y; ext k; fin_cases k <;> rfl
-    · convert h2 x y; ext k; fin_cases k <;> rfl
-  exact ⟨by omega, fun x y i j ↦ (hval x y i).trans (hval x y j).symm⟩
-
-/-- No coordinate projection on a nontrivial carrier is a WNU operation. -/
-theorem not_isWeakNearUnanimity_proj {A : Type u} [Nontrivial A] {m : ℕ} (i : Fin m) :
-    ¬ IsWeakNearUnanimity (fun a : Fin m → A ↦ a i) := by
-  intro hf
-  have hm := hf.two_le
-  obtain ⟨x, y, hxy⟩ := exists_pair_ne A
-  let j : Fin m := if i.1 = 0 then ⟨1, by omega⟩ else ⟨0, by omega⟩
-  have hji : j ≠ i := by
-    intro h
-    have hv : j.1 = i.1 := congrArg Fin.val h
-    by_cases hi0 : i.1 = 0 <;> simp [j, hi0] at hv
-    exact hi0 hv.symm
-  have heq := hf.update_eq x y i j
-  simp only [Function.update_self, Function.update_of_ne hji.symm] at heq
-  exact hxy heq.symm
-
-/-- No negated Boolean coordinate projection is a WNU operation. -/
-theorem not_isWeakNearUnanimity_negProj {m : ℕ} (i : Fin m) :
-    ¬ IsWeakNearUnanimity (fun a : Fin m → Bool ↦ !(a i)) := by
-  intro hf
-  have hm := hf.two_le
-  let j : Fin m := if i.1 = 0 then ⟨1, by omega⟩ else ⟨0, by omega⟩
-  have hji : j ≠ i := by
-    intro h
-    have hv : j.1 = i.1 := congrArg Fin.val h
-    by_cases hi0 : i.1 = 0 <;> simp [j, hi0] at hv
-    exact hi0 hv.symm
-  have heq := hf.update_eq false true i j
-  simp only [Function.update_self, Function.update_of_ne hji.symm] at heq
-  exact Bool.false_ne_true heq
-
-/-! ### Fixed-template finite-domain constraint languages -/
-
-/-- A fixed-arity constraint language on domain `D` indexed by relation alphabet `Rel`. -/
-@[ext]
-structure Language (D : Type u) (Rel : Type v) where
-  /-- Declared arity of each relation symbol. -/
-  arity : Rel → ℕ
-  /-- Boolean semantics evaluated on lists of length `arity r`. -/
-  sem : Rel → List D → Bool
-
-namespace Language
-
-section General
-
-variable {D : Type u} {Rel : Type v}
-
-instance instInhabited : Inhabited (Language D Rel) :=
-  ⟨⟨fun _ ↦ 0, fun _ _ ↦ true⟩⟩
-
-/-- The `arity r`-ary relation on `D` interpreted by symbol `r : Rel`. -/
-def relation (Γ : Language D Rel) (r : Rel) : Set (Fin (Γ.arity r) → D) :=
-  {a | Γ.sem r (List.ofFn a) = true}
-
-theorem mem_relation_iff (Γ : Language D Rel) (r : Rel) (a : Fin (Γ.arity r) → D) :
-    a ∈ Γ.relation r ↔ Γ.sem r (List.ofFn a) = true :=
-  Iff.rfl
-
-/-- Evaluation of a well-formed constraint agrees with membership in `Γ.relation c.rel`. -/
-theorem constraint_eval_eq_true_iff {V : Type*} (Γ : Language D Rel) {c : Constraint Rel V}
-    (hc : c.scope.length = Γ.arity c.rel) (σ : V → D) (v₀ : V) :
-    c.eval Γ.sem σ = true ↔
-      (fun i : Fin (Γ.arity c.rel) ↦ σ (c.scope.getD i.1 v₀)) ∈ Γ.relation c.rel := by
-  change Γ.sem c.rel (c.scope.map σ) = true ↔
-    Γ.sem c.rel (List.ofFn fun i : Fin (Γ.arity c.rel) ↦ σ (c.scope.getD i.1 v₀)) = true
-  rw [List.ofFn_getD_eq_map_of_length σ v₀ hc]
-
-/-- Evaluation of a well-formed CSP agrees with membership in every constraint relation. -/
-theorem csp_eval_eq_true_iff {V : Type*} (Γ : Language D Rel) {F : CSP Rel V}
-    (hF : F.WellFormed Γ.arity) (σ : V → D) (v₀ : V) :
-    F.eval Γ.sem σ = true ↔
-      ∀ c ∈ F, (fun i : Fin (Γ.arity c.rel) ↦ σ (c.scope.getD i.1 v₀)) ∈ Γ.relation c.rel := by
-  simp only [Cslib.Logic.PL.CSP.eval, List.all_eq_true]
-  exact forall₂_congr fun c hc ↦ Γ.constraint_eval_eq_true_iff (hF c hc) σ v₀
-
-/-- `Γ.HasPolymorphism f` asserts that `f : (J → D) → D` preserves every relation of `Γ`. -/
-def HasPolymorphism (Γ : Language D Rel) {J : Type*} (f : (J → D) → D) : Prop :=
-  ∀ r : Rel, IsPolymorphism f (Γ.relation r)
-
-/-- Every polymorphism of `Γ` preserves the solution set of every well-formed CSP over `Γ`. -/
-theorem isPolymorphism_solutions {V J : Type*} (Γ : Language D Rel)
-    {f : (J → D) → D} (hf : Γ.HasPolymorphism f) {F : CSP Rel V} (hF : F.WellFormed Γ.arity) :
-    IsPolymorphism f {σ : V → D | F.eval Γ.sem σ = true} := by
-  rcases isEmpty_or_nonempty V with hV | ⟨⟨v₀⟩⟩
-  · intro a ha
-    rw [Set.mem_ofPred_eq]
-    simp only [Cslib.Logic.PL.CSP.eval, List.all_eq_true]
-    intro c hc
-    have hnil : c.scope = [] := List.eq_nil_iff_forall_not_mem.mpr fun v _ ↦ hV.false v
-    have h0 : Γ.arity c.rel = 0 := by rw [← hF c hc, hnil]; rfl
-    have hmem := hf c.rel (fun _ i ↦ (Nat.not_lt_zero i.1 (h0 ▸ i.2)).elim) fun j ↦ by
-      have hj := (List.all_eq_true.mp (ha j)) c hc
-      change Γ.sem c.rel (List.ofFn fun i : Fin (Γ.arity c.rel) ↦ _) = true
-      have hof : (List.ofFn fun i : Fin (Γ.arity c.rel) ↦
-          (Nat.not_lt_zero i.1 (h0 ▸ i.2)).elim) = ([] : List D) := by
-        rw [List.ofFn_eq_nil_iff]; exact h0
-      rw [hof]; simpa [Constraint.eval, hnil] using hj
-    change Γ.sem c.rel (c.scope.map _) = true
-    have hof : (List.ofFn fun i : Fin (Γ.arity c.rel) ↦
-        f fun _ ↦ (Nat.not_lt_zero i.1 (h0 ▸ i.2)).elim) = ([] : List D) := by
-      rw [List.ofFn_eq_nil_iff]; exact h0
-    change Γ.sem c.rel (List.ofFn _) = true at hmem
-    rw [hof] at hmem; simpa [hnil] using hmem
-  · intro a ha
-    rw [Set.mem_ofPred_eq, Γ.csp_eval_eq_true_iff hF _ v₀]
-    intro c hc
-    exact hf c.rel (fun j i ↦ a j (c.scope.getD i.1 v₀)) fun j ↦
-      (Γ.csp_eval_eq_true_iff hF (a j) v₀).mp (ha j) c hc
-
-/-- A constraint language `Γ` admits a WNU polymorphism if some WNU operation preserves `Γ`. -/
-def AdmitsWNU (Γ : Language D Rel) : Prop :=
-  ∃ (m : ℕ) (f : (Fin m → D) → D), IsWeakNearUnanimity f ∧ Γ.HasPolymorphism f
-
-/-- `Γ` contains all constant relations if every singleton `{a}` is represented in `Γ`. -/
-def ContainsConstants (Γ : Language D Rel) : Prop :=
-  ∀ a : D, ∃ r : Rel, ∃ _ : Γ.arity r = 1,
-    ∀ x : Fin (Γ.arity r) → D, x ∈ Γ.relation r ↔ x ⟨0, by omega⟩ = a
-
-/-- Expand `Γ` by indexed unary singleton relations `{(x) | x = c i}`. -/
-noncomputable def withUnarySingletons (Γ : Language D Rel) {ι : Type w} (c : ι → D) :
-    Language D (Rel ⊕ ι) where
-  arity := Sum.elim Γ.arity fun _ ↦ 1
-  sem := by
-    classical
-    exact Sum.elim Γ.sem fun i l ↦
-      match l with
-      | [x] => decide (x = c i)
-      | _ => false
-
-@[simp]
-theorem withUnarySingletons_sem_inl (Γ : Language D Rel) {ι : Type w} (c : ι → D)
-    (r : Rel) (l : List D) :
-    (Γ.withUnarySingletons c).sem (.inl r) l = Γ.sem r l := by
-  classical simp [withUnarySingletons]
-
-@[simp]
-theorem withUnarySingletons_sem_inr_singleton (Γ : Language D Rel) {ι : Type w} (c : ι → D)
-    (i : ι) (x : D) :
-    ((Γ.withUnarySingletons c).sem (.inr i) [x] = true) ↔ x = c i := by
-  classical simp [withUnarySingletons]
-
-/-- The full constant expansion `Γ* = Γ ∪ {(x = a) | a ∈ D}`. -/
-noncomputable def withConstants (Γ : Language D Rel) : Language D (Rel ⊕ D) :=
-  Γ.withUnarySingletons id
-
-/-- `Γ*` contains all constant relations on `D`. -/
-theorem containsConstants_withConstants (Γ : Language D Rel) :
-    Γ.withConstants.ContainsConstants := fun a ↦
-  ⟨.inr a, rfl, fun x ↦ by
-    rw [mem_relation_iff]
-    have hof : List.ofFn x = [x ⟨0, by simp [withConstants, withUnarySingletons]⟩] := rfl
-    rw [hof]; exact Γ.withUnarySingletons_sem_inr_singleton id a _⟩
-
-/-- The `m`-th direct-power constraint language `Γ^m = {R^m | R ∈ Γ}` on domain `Fin m → D`. -/
-def power (Γ : Language D Rel) (m : ℕ) : Language (Fin m → D) Rel where
-  arity := Γ.arity
-  sem r l := (List.finRange m).all fun i ↦ Γ.sem r (l.map fun α ↦ α i)
-
-@[simp]
-theorem power_arity (Γ : Language D Rel) (m : ℕ) (r : Rel) :
-    (Γ.power m).arity r = Γ.arity r := by
-  rfl
-
-/-- Coordinatewise characterization of `R^m`. -/
-theorem mem_power_relation_iff (Γ : Language D Rel) (m : ℕ) (r : Rel)
-    (a : Fin ((Γ.power m).arity r) → Fin m → D) :
-    a ∈ (Γ.power m).relation r ↔
-      ∀ i : Fin m, (fun j : Fin (Γ.arity r) ↦ a ⟨j.1, by simp [j.2]⟩ i) ∈ Γ.relation r := by
-  rw [mem_relation_iff]
-  change ((List.finRange m).all fun i ↦ Γ.sem r ((List.ofFn a).map fun α ↦ α i)) = true ↔ _
-  simp only [List.all_eq_true, List.mem_finRange, forall_const]
-  exact forall_congr' fun i ↦ by rw [List.map_ofFn, mem_relation_iff]; rfl
-
-end General
-
-/-! ### Decision problem `CSP(Γ)` and computational complexity -/
-
-section Complexity
-
-variable {D : Type u} {Rel : Type}
-
-/-- Exact-arity decision problem `CSP(Γ)`; coincides with `CSPSAT` when `D = Bool`. -/
-def cspsat (Γ : Language D Rel) : Set (CSP Rel ℕ) :=
-  {F | F.WellFormed Γ.arity ∧ F.Satisfiable Γ.sem}
-
-theorem mem_cspsat_iff (Γ : Language D Rel) (F : CSP Rel ℕ) :
-    F ∈ Γ.cspsat ↔ F.WellFormed Γ.arity ∧ F.Satisfiable Γ.sem :=
-  Iff.rfl
-
-theorem bool_cspsat_eq (Γ : Language Bool Rel) :
-    Γ.cspsat = CSPSAT Γ.arity Γ.sem := by
-  rfl
-
-/-- Guarded polynomial-time compilation out of `Γ.cspsat`. -/
-theorem cspsat_polyTimeReducible_of_guard [Finite Rel] (Γ : Language D Rel)
-    (encRel : Rel ↪ List Bool) {β : Type} {encB : β ↪ List Bool} {B : Set β}
-    {compile : CSP Rel ℕ → β} (reject : β)
-    (hcompile : ComputableInPolyTime compile (encCSP encRel encNat) encB)
-    (hcorrect : ∀ F, F.WellFormed Γ.arity → (F.Satisfiable Γ.sem ↔ compile F ∈ B))
-    (hreject : reject ∉ B) :
-    PolyTimeReducible (encCSP encRel encNat) encB Γ.cspsat B :=
-  .of_guard reject (Cslib.Complexity.CSP.computableInPolyTime_validArity encRel Γ.arity)
-    hcompile hreject fun F ↦ by
-      rw [mem_cspsat_iff, Cslib.Logic.PL.CSP.validArity_eq_true_iff]
-      exact and_congr_right (hcorrect F)
-
-/-- When `Γ` contains all constant relations, `CSP(Γ*) ≤_m^p CSP(Γ)`. -/
-theorem withConstants_cspsat_polyTimeReducible {D : Type} [Finite D] [Nonempty D] [Finite Rel]
-    (Γ : Language D Rel) (hconst : Γ.ContainsConstants)
-    (encRel : Rel ↪ List Bool) (encD : D ↪ List Bool) :
-    PolyTimeReducible (encCSP (encSum encRel encD) encNat) (encCSP encRel encNat)
-      Γ.withConstants.cspsat Γ.cspsat := by
-  classical
-  choose sym hsym_ar hsym_rel using hconst
-  obtain ⟨d₀⟩ := ‹Nonempty D›
-  let mapRel : Rel ⊕ D → Rel := Sum.elim id sym
-  let compile : CSP (Rel ⊕ D) ℕ → CSP Rel ℕ := List.map fun c ↦ ⟨mapRel c.rel, c.scope⟩
-  have hcompile : ComputableInPolyTime compile
-      (encCSP (encSum encRel encD) encNat) (encCSP encRel encNat) :=
-    ComputableInPolyTime.mapWithInput ComputableInPolyTime.id'
-      (encConstraint_mk_polyTime
-        ((ComputableInPolyTime.of_finite mapRel).comp
-          (encConstraint_rel_polyTime (ComputableInPolyTime.snd _ _)))
-        (encConstraint_scope_polyTime (ComputableInPolyTime.snd _ _)))
-  let reject : CSP Rel ℕ := [⟨sym d₀, List.replicate (Γ.arity (sym d₀) + 1) 0⟩]
-  have hrej : reject ∉ Γ.cspsat := fun ⟨hF, _⟩ ↦ by
-    have h := hF ⟨sym d₀, List.replicate (Γ.arity (sym d₀) + 1) 0⟩ (List.mem_singleton.mpr rfl)
-    simp at h
-  refine Γ.withConstants.cspsat_polyTimeReducible_of_guard (encSum encRel encD)
-    reject hcompile ?_ hrej
-  intro F hF
-  have hWF : (compile F).WellFormed Γ.arity := by
-    intro c hc
-    obtain ⟨⟨r | a, vs⟩, hc₀, rfl⟩ := List.mem_map.mp hc
-    · exact hF _ hc₀
-    · simpa [mapRel, hsym_ar a, withConstants, withUnarySingletons] using hF _ hc₀
-  rw [mem_cspsat_iff, and_iff_right hWF]
-  refine exists_congr fun σ ↦ ?_
-  simp only [compile, Cslib.Logic.PL.CSP.eval, List.all_map, List.all_eq_true]
-  refine forall₂_congr fun c hc ↦ ?_
-  have hlen := hF c hc
-  rcases c with ⟨r | a, vs⟩
-  · simp [Constraint.eval, mapRel, withConstants]
-  · rcases vs with _ | ⟨v, _ | _⟩ <;>
-      simp [withConstants, withUnarySingletons] at hlen
-    have hrel := hsym_rel a fun _ ↦ σ v
-    rw [mem_relation_iff] at hrel
-    have hof : List.ofFn (fun _ : Fin (Γ.arity (sym a)) ↦ σ v) = [σ v] := by simp [hsym_ar a]
-    rw [hof] at hrel
-    simp only [Constraint.eval, List.map_cons, List.map_nil, mapRel, withConstants,
-      withUnarySingletons_sem_inr_singleton, id_eq]
-    exact hrel.symm
-
-private def decodeOneHot (s : ℕ) (bits : List Bool) : Option (Fin s) :=
-  if bits.length = s ∧ bits.count true = 1 then
-    let idx := bits.idxOf true
-    if h : idx < s then some ⟨idx, h⟩ else none
-  else
-    none
-
-private lemma filter_range_eq_singleton {s m : ℕ} (hm : m < s) :
-    (List.range s).filter (fun j ↦ decide (m = j)) = [m] := by
-  induction s with
-  | zero => omega
-  | succ s ih =>
-    rw [List.range_succ, List.filter_append, List.filter_cons, List.filter_nil]
-    rcases eq_or_lt_of_le (Nat.lt_succ_iff.mp hm) with rfl | hlt
-    · have hnil : (List.range m).filter (fun j ↦ decide (m = j)) = [] :=
-        List.filter_eq_nil_iff.mpr fun j hj ↦ by simp [Nat.ne_of_gt (List.mem_range.mp hj)]
-      simp [hnil]
-    · simp [ih hlt, show ¬ m = s by omega]
-
-private lemma idxOf_true_range_eq {s m : ℕ} (hm : m < s) :
-    ((List.range s).map fun j ↦ decide (m = j)).idxOf true = m := by
-  have haux : ∀ (k len : ℕ), k ≤ m → m < k + len →
-      (((List.range len).map fun t ↦ decide (m = k + t)).idxOf true) = m - k := by
-    intro k len
-    induction len generalizing k with
-    | zero => intro _ h; omega
-    | succ len ih =>
-      intro hkm hlt
-      rw [List.range_succ_eq_map, List.map_cons, List.map_map]
-      rcases eq_or_lt_of_le hkm with rfl | hgt
-      · simp
-      · rw [List.idxOf_cons_ne _ (by simp [Nat.ne_of_gt hgt])]
-        have hfn : ((fun t ↦ decide (m = k + t)) ∘ Nat.succ) =
-            fun t ↦ decide (m = (k + 1) + t) :=
-          funext fun t ↦ Bool.eq_iff_iff.mpr ⟨fun h ↦ by simp at h ⊢; omega,
-            fun h ↦ by simp at h ⊢; omega⟩
-        rw [hfn, ih (k + 1) (by omega) (by omega)]; omega
-  simpa using haux 0 s (Nat.zero_le m) (by simpa using hm)
-
-private lemma decodeOneHot_tabulate {s : ℕ} (i : Fin s) :
-    decodeOneHot s ((List.range s).map fun j ↦ decide (i.1 = j)) = some i := by
-  have hcount : ((List.range s).map fun j ↦ decide (i.1 = j)).count true = 1 := by
-    rw [List.count_eq_countP, List.countP_map, List.countP_eq_length_filter]
-    have hfilt : (List.range s).filter ((· == true) ∘ fun j ↦ decide (i.1 = j)) =
-        (List.range s).filter (fun j ↦ decide (i.1 = j)) :=
-      List.filter_congr fun j _ ↦ by simp
-    rw [hfilt, filter_range_eq_singleton i.2]; rfl
-  simp [decodeOneHot, hcount, idxOf_true_range_eq i.2, i.2]
-
-private def decodeOneHotTuple (s : ℕ) : ℕ → List Bool → Option (List (Fin s))
-  | 0, [] => some []
-  | 0, _ :: _ => none
-  | k + 1, bits =>
-      match decodeOneHot s (bits.take s), decodeOneHotTuple s k (bits.drop s) with
-      | some d, some ds => some (d :: ds)
-      | _, _ => none
-
-private lemma decodeOneHotTuple_map_block {s : ℕ} (vs : List ℕ) (τ : ℕ → Bool)
-    (d : ℕ → Fin s)
-    (hd : ∀ v ∈ vs, decodeOneHot s ((List.range s).map fun j ↦ τ (s * v + j)) = some (d v)) :
-    decodeOneHotTuple s vs.length
-      ((vs.flatMap fun v ↦ (List.range s).map fun j ↦ s * v + j).map τ) =
-      some (vs.map d) := by
-  induction vs with
+/-- Encoding `I : CSPInstance n` agrees bit-for-bit with encoding `I.toRaw` as `List (List ℕ)`. -/
+theorem encCSPInstance_eq_encList_toRaw {n : ℕ} (I : CSPInstance n) :
+    encCSPInstance n I = encList (encList encNat) I.toRaw := by
+  induction I with
   | nil => rfl
-  | cons v vs ih =>
-    have hhd := hd v List.mem_cons_self
-    have htl := ih fun u hu ↦ hd u (List.mem_cons_of_mem v hu)
-    let chunk : List Bool := (List.range s).map fun j ↦ τ (s * v + j)
-    let rest : List Bool := (vs.flatMap fun u ↦ (List.range s).map fun j ↦ s * u + j).map τ
-    have hlen : chunk.length = s := by simp [chunk]
-    have hmap : ((v :: vs).flatMap fun u ↦ (List.range s).map fun j ↦ s * u + j).map τ =
-        chunk ++ rest := by simp [chunk, rest, List.map_map, Function.comp_def]
-    rw [hmap, List.length_cons, List.map_cons]
-    change (match decodeOneHot s ((chunk ++ rest).take s),
-        decodeOneHotTuple s vs.length ((chunk ++ rest).drop s) with
-      | some a, some as => some (a :: as)
-      | _, _ => none) = some (d v :: vs.map d)
-    rw [List.take_left' hlen, List.drop_left' hlen, hhd, htl]
+  | cons t ts ih =>
+    simp only [encCSPInstance, CSPInstance.toRaw, List.map_cons, encList_cons] at ih ⊢
+    rw [ih]
+    rfl
 
-/-- Every fixed-template CSP over a finite nonempty domain `D` and finite relation alphabet `Rel`
-belongs to `NP`, via polynomial-time one-hot compilation into Boolean `CSPSAT`. -/
-theorem cspsat_mem_NP [Finite D] [Nonempty D] [Finite Rel] (Γ : Language D Rel)
-    (encRel : Rel ↪ List Bool) :
-    Γ.cspsat ∈ NP (encCSP encRel encNat) := by
+/-- `CSPInstance.toRaw` is polynomial-time computable. -/
+theorem computableInPolyTime_toRaw (n : ℕ) :
+    ComputableInPolyTime (CSPInstance.toRaw (n := n))
+      (encCSPInstance n) (encList (encList encNat)) :=
+  ComputableInPolyTime.id'.of_enc_eq fun I => (encCSPInstance_eq_encList_toRaw I).symm
+
+/-- Converting a polynomial-time list-of-lists constructor whose outputs all have length `n` into a
+polynomial-time `CSPInstance n` constructor. -/
+theorem computableInPolyTime_ofRaw_comp {α : Type} {encA : α ↪ List Bool} (n : ℕ)
+    {g : α → List (List ℕ)}
+    (hg : ComputableInPolyTime g encA (encList (encList encNat)))
+    (hlen : ∀ a, ∀ l ∈ g a, l.length = n) :
+    ComputableInPolyTime (fun a => CSPInstance.ofRaw n (g a)) encA (encCSPInstance n) := by
+  refine hg.of_enc_eq fun a => ?_
+  rw [encCSPInstance_eq_encList_toRaw]
+  congr 1
+  simp only [CSPInstance.toRaw, CSPInstance.ofRaw, List.map_map]
+  symm
+  have hmap_eq : ∀ (L : List (List ℕ)), (∀ l ∈ L, l.length = n) →
+      L.map (List.ofFn ∘ fun l (i : Fin n) => l.getD i.val 0) = L := by
+    intro L hL
+    induction L with
+    | nil => rfl
+    | cons l ls ih =>
+      simp only [List.map_cons, ih (fun x hx => hL x (List.mem_cons_of_mem _ hx))]
+      congr 1
+      have hln : l.length = n := hL l List.mem_cons_self
+      refine List.ext_getElem (by simp [hln]) fun i hi _ => ?_
+      simp only [Function.comp_apply, List.getElem_ofFn]
+      rw [List.getD_eq_getElem _ _ (by omega)]
+  exact (hmap_eq (g a) (hlen a)).symm
+
+/-- All variable occurrences of a CSP instance, in order. -/
+@[expose] def CSPInstance.vars {n : ℕ} (I : CSPInstance n) : List ℕ :=
+  I.flatMap List.ofFn
+
+/-- Number of distinct variables occurring in a CSP instance. -/
+@[expose] def CSPInstance.numVars {n : ℕ} (I : CSPInstance n) : ℕ :=
+  I.vars.toFinset.card
+
+/-- Distinct variables of a CSP instance in order of first occurrence. -/
+@[expose] def CSPInstance.distinctVars {n : ℕ} (I : CSPInstance n) : List ℕ :=
+  Cslib.Complexity.selectDistinct I.vars (List.replicate I.vars.length true)
+
+/-- The decision problem `CSP(R)` for a relation `R : Set (Fin n → D)`. -/
+@[expose] def CSPRel {D : Type*} {n : ℕ} (R : Set (Fin n → D)) : Set (CSPInstance n) :=
+  {I | ∃ σ : ℕ → D, ∀ t ∈ I, (σ ∘ t) ∈ R}
+
+/-- The graph homomorphism problem `$H$-Coloring` on `Cslib.Complexity.Graph`. -/
+@[expose] def HColoring {V : Type*} (H : _root_.SimpleGraph V) : Set Cslib.Complexity.Graph :=
+  {G | Nonempty (G.induced →g H)}
+
+/-- Membership in `HColoring H` written as a map `ℕ → V` when `V` is nonempty. -/
+theorem mem_HColoring_iff_of_nonempty {V : Type*} [Nonempty V] {H : _root_.SimpleGraph V}
+    {G : Cslib.Complexity.Graph} :
+    G ∈ HColoring H ↔
+      ∃ f : ℕ → V, ∀ u ∈ G.vertices, ∀ v ∈ G.vertices, G.toSimpleGraph.Adj u v →
+        H.Adj (f u) (f v) := by
   classical
-  have := Fintype.ofFinite D
-  let s := Fintype.card D
-  have hs : 0 < s := Fintype.card_pos
-  let eD : D ≃ Fin s := Fintype.equivFin D
-  obtain ⟨d₀⟩ := ‹Nonempty D›
-  let bArity : Rel ⊕ Unit → ℕ := Sum.elim (fun r ↦ s * Γ.arity r) (fun _ ↦ s)
-  let bSem : Rel ⊕ Unit → List Bool → Bool := Sum.elim
-    (fun r bits ↦ match decodeOneHotTuple s (Γ.arity r) bits with
-      | some ds => Γ.sem r (ds.map eD.symm)
-      | none => false)
-    (fun _ bits ↦ (decodeOneHot s bits).isSome)
-  let encBRel : Rel ⊕ Unit ↪ List Bool := encSum encRel (encFinite Unit)
-  let block : ℕ → List ℕ := fun v ↦ (List.range s).map fun j ↦ s * v + j
-  have hblock : ComputableInPolyTime block encNat (encList encNat) :=
-    ComputableInPolyTime.mapConst (List.range s) fun j _ ↦
-      ComputableInPolyTime.binary_add'
-        (ComputableInPolyTime.binary_mul' (ComputableInPolyTime.const s) ComputableInPolyTime.id')
-        (ComputableInPolyTime.const j)
-  let compileConstraint : Constraint Rel ℕ → List (Constraint (Rel ⊕ Unit) ℕ) := fun c ↦
-    ⟨Sum.inl c.rel, c.scope.flatMap block⟩ :: c.scope.map fun v ↦ ⟨Sum.inr (), block v⟩
-  have hcompC : ComputableInPolyTime compileConstraint
-      (encConstraint encRel encNat) (encCSP encBRel encNat) := by
-    have hscope := encConstraint_scope_polyTime
-      (ComputableInPolyTime.id' (encIn := encConstraint encRel encNat))
-    have hrel : ComputableInPolyTime (fun c : Constraint Rel ℕ ↦ (Sum.inl c.rel : Rel ⊕ Unit))
-        (encConstraint encRel encNat) encBRel :=
-      (ComputableInPolyTime.sumInl encRel (encFinite Unit)).comp
-        (encConstraint_rel_polyTime ComputableInPolyTime.id')
-    have hflat : ComputableInPolyTime (fun c : Constraint Rel ℕ ↦ c.scope.flatMap block)
-        (encConstraint encRel encNat) (encList encNat) :=
-      ComputableInPolyTime.flatMapWithInput hscope
-        (hblock.comp (ComputableInPolyTime.snd _ _))
-    have hhead := encConstraint_mk_polyTime (encRel := encBRel) (encV := encNat) hrel hflat
-    have hconstInr : ComputableInPolyTime
-        (fun _ : Constraint Rel ℕ × ℕ ↦ (Sum.inr () : Rel ⊕ Unit))
-        (encPair (encConstraint encRel encNat) encNat) encBRel :=
-      ComputableInPolyTime.const (Sum.inr ())
-    have htail : ComputableInPolyTime
-        (fun c : Constraint Rel ℕ ↦
-          c.scope.map fun v ↦ (⟨Sum.inr (), block v⟩ : Constraint (Rel ⊕ Unit) ℕ))
-        (encConstraint encRel encNat) (encCSP encBRel encNat) :=
-      ComputableInPolyTime.mapWithInput hscope
-        (encConstraint_mk_polyTime hconstInr (hblock.comp (ComputableInPolyTime.snd _ _)))
-    exact (ComputableInPolyTime.cons _).comp (hhead.prod htail)
-  let compile : CSP Rel ℕ → CSP (Rel ⊕ Unit) ℕ := fun F ↦ F.flatMap compileConstraint
-  have hcompile : ComputableInPolyTime compile (encCSP encRel encNat) (encCSP encBRel encNat) :=
-    ComputableInPolyTime.flatMapWithInput ComputableInPolyTime.id'
-      (hcompC.comp (ComputableInPolyTime.snd _ _))
-  let reject : CSP (Rel ⊕ Unit) ℕ := [⟨Sum.inr (), []⟩]
-  have hreject : reject ∉ CSPSAT bArity bSem := fun ⟨hWF, _⟩ ↦ by
-    have h : 0 = s := hWF ⟨Sum.inr (), []⟩ (List.mem_singleton.mpr rfl)
-    omega
-  have hred : PolyTimeReducible (encCSP encRel encNat) (encCSP encBRel encNat)
-      Γ.cspsat (CSPSAT bArity bSem) := by
-    refine Γ.cspsat_polyTimeReducible_of_guard encRel reject hcompile ?_ hreject
-    intro F hF
-    have hWF : (compile F).WellFormed bArity := by
-      intro c' hc'
-      simp only [compile, List.mem_flatMap, compileConstraint, List.mem_cons,
-        List.mem_map] at hc'
-      obtain ⟨c, hc, rfl | ⟨v, _, rfl⟩⟩ := hc'
-      · have hlen : (c.scope.flatMap block).length = s * c.scope.length := by
-          induction c.scope with
-          | nil => simp
-          | cons _ _ ih =>
-            simp only [List.flatMap_cons, List.length_append, ih, List.length_cons, block,
-              List.length_map, List.length_range]; ring
-        rw [hlen, hF c hc]; rfl
-      · simp [bArity, block]
-    rw [CSPSAT.mem_iff, and_iff_right hWF]
+  constructor
+  · rintro ⟨φ⟩
+    obtain ⟨v0⟩ := ‹Nonempty V›
+    refine ⟨fun u => if hu : u ∈ G.vertices then φ ⟨u, hu⟩ else v0, fun u hu v hv huv => ?_⟩
+    have hadj_ind : G.induced.Adj ⟨u, hu⟩ ⟨v, hv⟩ := huv
+    simpa only [hu, hv, dite_true] using φ.map_rel hadj_ind
+  · rintro ⟨f, hf⟩
+    exact ⟨⟨fun u => f u.1, fun {u v} huv => hf u.1 u.2 v.1 v.2 huv⟩⟩
+
+/-- `HColoring` of the complete graph on `Fin k` is identically `KColoring k`. -/
+theorem hColoring_top_eq_kColoring (k : ℕ) :
+    HColoring (⊤ : _root_.SimpleGraph (Fin k)) = KColoring k := by
+  ext G
+  rfl
+
+/-- Trivial `CSP(R)` (every instance satisfiable) is never `NP`-complete, even if `P = NP`. -/
+theorem CSPRel.not_npComplete_of_trivial {D : Type*} {n : ℕ} {R : Set (Fin n → D)}
+    (htriv : CSPRel R = Set.univ) : ¬ NPComplete (encCSPInstance n) (CSPRel R) := by
+  intro hnpc
+  have hEmpty_P : (∅ : Set Bool) ∈ P encBool :=
+    ⟨fun _ => false, ComputableInPolyTime.const false, fun b => by simp⟩
+  have hEmpty_NP : (∅ : Set Bool) ∈ NP encBool := P_subset_NP hEmpty_P
+  obtain ⟨f, _, hred⟩ := hnpc.2 encBool (∅ : Set Bool) hEmpty_NP
+  have := (hred true).mpr (by rw [htriv]; trivial)
+  exact this
+
+/-! ### `NP` membership for `CSPRel` and `HColoring` -/
+
+/-- Every finite-domain `CSP(R)` belongs to `NP`. -/
+theorem CSPRel.mem_NP {D : Type*} [Finite D] {n : ℕ} (R : Set (Fin n → D)) :
+    CSPRel R ∈ NP (encCSPInstance n) := by
+  have : Fintype D := Fintype.ofFinite D
+  classical
+  let k : ℕ := Fintype.card D
+  by_cases hk : k = 0
+  · have hEmpty : IsEmpty D := Fintype.card_eq_zero_iff.mp hk
+    have hCSPEmpty : CSPRel R = ∅ := by
+      ext I
+      simp only [CSPRel, Set.mem_ofPred_eq, Set.mem_empty_iff_false, iff_false, not_exists]
+      intro σ _
+      exact isEmptyElim (σ 0)
+    rw [hCSPEmpty]
+    exact P_subset_NP ⟨fun _ => false, ComputableInPolyTime.const false, fun _ => by simp⟩
+  · have hkpos : 0 < k := Nat.pos_of_ne_zero hk
+    let e : D ≃ Fin k := Fintype.equivFinOfCardEq rfl
+    let R_nat : List (List ℕ) :=
+      ((Set.toFinite R).toFinset.toList).map fun t => List.ofFn fun i => (e (t i)).val
+    have hR_nat_mem : ∀ (c : ℕ → ℕ) (t : Fin n → ℕ) (hc : ∀ i, c (t i) < k),
+        List.ofFn (fun i => c (t i)) ∈ R_nat ↔
+          (fun i => e.symm ⟨c (t i), hc i⟩) ∈ R := by
+      intro c t hc
+      simp only [R_nat, List.mem_map, Set.Finite.mem_toFinset, Finset.mem_toList]
+      constructor
+      · rintro ⟨a, ha, hEq⟩
+        have hfun : (fun i => e.symm ⟨c (t i), hc i⟩) = a := by
+          funext i
+          have hi := congrArg (fun l => l.getD i.val 0) hEq
+          have hlen1 : i.val < (List.ofFn fun i : Fin n => (e (a i)).val).length := by simp
+          have hlen2 : i.val < (List.ofFn fun i : Fin n => c (t i)).length := by simp
+          rw [List.getD_eq_getElem _ _ hlen1, List.getD_eq_getElem _ _ hlen2,
+            List.getElem_ofFn, List.getElem_ofFn] at hi
+          apply e.injective
+          apply Fin.ext
+          simpa using hi.symm
+        rwa [hfun]
+      · intro hmem
+        refine ⟨fun i => e.symm ⟨c (t i), hc i⟩, hmem, ?_⟩
+        refine List.ext_getElem (by simp) fun i hi _ => ?_
+        simp
+    let verifier : CSPInstance n × List Bool → Bool := fun x =>
+      let raw := x.1.toRaw
+      let V := raw.flatten
+      let c := KColoring.colorOf k V x.2
+      V.all (fun v => decide (c v < k)) &&
+        raw.all (fun l => R_nat.any (fun r => decide (l.map c = r)))
+    have hV_len : ∀ I : CSPInstance n, I.toRaw.flatten.length ≤ (encCSPInstance n I).length := by
+      intro I
+      rw [encCSPInstance_eq_encList_toRaw]
+      induction I.toRaw with
+      | nil => simp
+      | cons l ls ih =>
+        have h1 : l.length ≤ (encList encNat l).length := length_le_length_encList encNat l
+        simp only [encList_cons, List.length_append, List.flatten_cons, List.length_flatten] at *
+        have := length_frame (encList encNat l)
+        omega
+    have hVer : IsVerifier (encCSPInstance n) (Polynomial.C k * Polynomial.X) verifier
+        (CSPRel R) := by
+      intro I
+      simp only [CSPRel, Set.mem_ofPred_eq, Polynomial.eval_mul, Polynomial.eval_C,
+        Polynomial.eval_X, verifier, Bool.and_eq_true, List.all_eq_true, List.any_eq_true,
+        decide_eq_true_eq]
+      constructor
+      · rintro ⟨σ, hσ⟩
+        let V := I.toRaw.flatten
+        let c : ℕ → ℕ := fun v => (e (σ v)).val
+        let w := unaryBlocks k (k * (encCSPInstance n I).length) (fun i => c (V.getD i 0))
+        have hcol : ∀ v ∈ V, KColoring.colorOf k V w v = c v := by
+          intro v hv
+          have hlt : V.idxOf v < V.length := List.idxOf_lt_length_iff.2 hv
+          have hget : V.getD (V.idxOf v) 0 = v := by
+            rw [List.getD_eq_getElem _ _ hlt, List.getElem_idxOf hlt]
+          have hlen : V.length ≤ (encCSPInstance n I).length := hV_len I
+          have hidx_le : V.idxOf v + 1 ≤ (encCSPInstance n I).length :=
+            Nat.lt_of_lt_of_le hlt hlen
+          rw [KColoring.colorOf, countP_unaryBlocks (by rw [hget]; exact (e (σ v)).isLt.le)
+            (Nat.mul_le_mul_left k hidx_le), hget]
+        refine ⟨w, length_unaryBlocks .., ?_, ?_⟩
+        · intro v hv
+          rw [hcol v hv]
+          exact (e (σ v)).isLt
+        · intro l hl
+          simp only [CSPInstance.toRaw, List.mem_map] at hl
+          rcases hl with ⟨t, ht, rfl⟩
+          have hmap : (List.ofFn t).map (KColoring.colorOf k V w) =
+              List.ofFn (fun i => c (t i)) := by
+            rw [List.map_ofFn]
+            refine congrArg List.ofFn (funext fun i => hcol (t i) ?_)
+            exact List.mem_flatten.mpr ⟨List.ofFn t, List.mem_map.mpr ⟨t, ht, rfl⟩,
+              List.mem_ofFn.mpr ⟨i, rfl⟩⟩
+          rw [hmap]
+          have hmem := (hR_nat_mem c t (fun i => (e (σ (t i))).isLt)).mpr
+          have hEq : (fun i => e.symm ⟨c (t i), (e (σ (t i))).isLt⟩) = σ ∘ t := by
+            funext i
+            simp [c]
+          rw [hEq] at hmem
+          exact ⟨_, hmem (hσ t ht), rfl⟩
+      · rintro ⟨w, -, hlt, hsat⟩
+        let V := I.toRaw.flatten
+        let c := KColoring.colorOf k V w
+        let d0 : D := e.symm ⟨0, hkpos⟩
+        let σ : ℕ → D := fun v => if hv : c v < k then e.symm ⟨c v, hv⟩ else d0
+        refine ⟨σ, fun t ht => ?_⟩
+        have ht_mem : ∀ i : Fin n, t i ∈ V := fun i =>
+          List.mem_flatten.mpr ⟨List.ofFn t, List.mem_map.mpr ⟨t, ht, rfl⟩,
+            List.mem_ofFn.mpr ⟨i, rfl⟩⟩
+        have htc : ∀ i : Fin n, c (t i) < k := fun i => hlt (t i) (ht_mem i)
+        obtain ⟨r, hr, hreq⟩ := hsat (List.ofFn t) (List.mem_map.mpr ⟨t, ht, rfl⟩)
+        rw [List.map_ofFn] at hreq
+        have hmem := (hR_nat_mem c t htc).mp (hreq.symm ▸ hr)
+        have hEq : σ ∘ t = fun i => e.symm ⟨c (t i), htc i⟩ := by
+          funext i
+          simp [σ, htc i]
+        rw [hEq]
+        exact hmem
+    have hpoly : ComputableInPolyTime verifier
+        (encPair (encCSPInstance n) encBits) encBool := by
+      have hraw : ComputableInPolyTime (fun x : CSPInstance n × List Bool => x.1.toRaw)
+          (encPair (encCSPInstance n) encBits) (encList (encList encNat)) :=
+        (computableInPolyTime_toRaw n).comp (fst _ _)
+      have hV : ComputableInPolyTime (fun x : CSPInstance n × List Bool => x.1.toRaw.flatten)
+          (encPair (encCSPInstance n) encBits) (encList encNat) :=
+        (flatten (enc := encNat)).comp hraw
+      have hcol : ComputableInPolyTime
+          (fun p : (CSPInstance n × List Bool) × ℕ =>
+            KColoring.colorOf k p.1.1.toRaw.flatten p.1.2 p.2)
+          (encPair (encPair (encCSPInstance n) encBits) encNat) encUnary :=
+        (KColoring.computableInPolyTime_colorOf k).comp
+          (((hV.comp (fst _ _)).prod ((snd _ _).comp (fst _ _))).prod (snd _ _))
+      have hpart1 : ComputableInPolyTime
+          (fun x : CSPInstance n × List Bool =>
+            x.1.toRaw.flatten.all fun v =>
+              decide (KColoring.colorOf k x.1.toRaw.flatten x.2 v < k))
+          (encPair (encCSPInstance n) encBits) encBool :=
+        allWithInput hV (unary_lt' hcol (const k))
+      have hmap : ComputableInPolyTime
+          (fun p : (CSPInstance n × List Bool) × List ℕ =>
+            p.2.map (KColoring.colorOf k p.1.1.toRaw.flatten p.1.2))
+          (encPair (encPair (encCSPInstance n) encBits) (encList encNat)) (encList encUnary) :=
+        mapWithInput (snd _ _) (hcol.comp (((fst _ _).comp (fst _ _)).prod (snd _ _)))
+      have hRcheck : ComputableInPolyTime
+          (fun p : (CSPInstance n × List Bool) × List ℕ =>
+            R_nat.any fun r =>
+              decide (p.2.map (KColoring.colorOf k p.1.1.toRaw.flatten p.1.2) = r))
+          (encPair (encPair (encCSPInstance n) encBits) (encList encNat)) encBool :=
+        anyConst R_nat fun r _ =>
+          decide_eq' hmap (const (encOut := encList encUnary) r)
+      have hpart2 : ComputableInPolyTime
+          (fun x : CSPInstance n × List Bool =>
+            x.1.toRaw.all fun l => R_nat.any fun r =>
+              decide (l.map (KColoring.colorOf k x.1.toRaw.flatten x.2) = r))
+          (encPair (encCSPInstance n) encBits) encBool :=
+        allWithInput hraw hRcheck
+      exact bool_and' hpart1 hpart2
+    exact ⟨_, verifier, hpoly, hVer⟩
+
+/-- Every finite graph homomorphism problem `HColoring H` belongs to `NP`. -/
+theorem HColoring.mem_NP {V : Type*} [Finite V] (H : _root_.SimpleGraph V) :
+    HColoring H ∈ NP encGraph := by
+  have : Fintype V := Fintype.ofFinite V
+  classical
+  let k : ℕ := Fintype.card V
+  by_cases hk : k = 0
+  · have hEmpty : IsEmpty V := Fintype.card_eq_zero_iff.mp hk
+    have hP : HColoring H ∈ P encGraph := by
+      refine ⟨fun G => G.vertices.all (fun _ => false),
+        allWithInput (by fun_prop) (const false), fun G => ?_⟩
+      simp only [HColoring, Set.mem_ofPred_eq, List.all_eq_true, Bool.false_eq_true]
+      constructor
+      · rintro ⟨φ⟩ u hu
+        exact isEmptyElim (φ ⟨u, hu⟩)
+      · intro hno
+        exact ⟨⟨fun u => False.elim (hno u.1 u.2), fun {u} => False.elim (hno u.1 u.2)⟩⟩
+    exact P_subset_NP hP
+  · have hkpos : 0 < k := Nat.pos_of_ne_zero hk
+    have : Nonempty V := Fintype.card_pos_iff.mp hkpos
+    let e : V ≃ Fin k := Fintype.equivFinOfCardEq rfl
+    let adjList : List (ℕ × ℕ) :=
+      ((Finset.univ : Finset (V × V)).filter fun p => H.Adj p.1 p.2).toList.map
+        fun p => ((e p.1).val, (e p.2).val)
+    have hadj_mem : ∀ (c : ℕ → ℕ) (u v : ℕ) (hu : c u < k) (hv : c v < k),
+        (c u, c v) ∈ adjList ↔ H.Adj (e.symm ⟨c u, hu⟩) (e.symm ⟨c v, hv⟩) := by
+      intro c u v hu hv
+      simp only [adjList, List.mem_map, Finset.mem_toList, Finset.mem_filter, Finset.mem_univ,
+        true_and, Prod.mk.injEq]
+      constructor
+      · rintro ⟨⟨a, b⟩, hab, h1, h2⟩
+        have ha : e.symm ⟨c u, hu⟩ = a := e.injective (by apply Fin.ext; simpa using h1.symm)
+        have hb : e.symm ⟨c v, hv⟩ = b := e.injective (by apply Fin.ext; simpa using h2.symm)
+        rwa [ha, hb]
+      · intro h
+        exact ⟨(e.symm ⟨c u, hu⟩, e.symm ⟨c v, hv⟩), h, by simp, by simp⟩
+    let verifier : Cslib.Complexity.Graph × List Bool → Bool := fun x =>
+      let c := KColoring.colorOf k x.1.vertices x.2
+      x.1.vertices.all fun u => decide (c u < k) &&
+        x.1.vertices.all fun v =>
+          !(x.1.adjBool u v && !adjList.any (fun p => decide ((c u, c v) = p)))
+    have hVer : IsVerifier encGraph (Polynomial.C k * Polynomial.X) verifier (HColoring H) := by
+      intro G
+      simp only [mem_HColoring_iff_of_nonempty, Polynomial.eval_mul, Polynomial.eval_C,
+        Polynomial.eval_X, verifier, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true,
+        Bool.not_eq_true', Bool.and_eq_false_iff, Graph.adjBool_eq_false_iff, Bool.not_eq_false',
+        List.any_eq_true]
+      constructor
+      · rintro ⟨f, hf⟩
+        let c : ℕ → ℕ := fun v => (e (f v)).val
+        let w := unaryBlocks k (k * (encGraph G).length) (fun i => c (G.vertices.getD i 0))
+        have hcol : ∀ v ∈ G.vertices, KColoring.colorOf k G.vertices w v = c v := by
+          intro v hv
+          have hlt : G.vertices.idxOf v < G.vertices.length := List.idxOf_lt_length_iff.2 hv
+          have hget : G.vertices.getD (G.vertices.idxOf v) 0 = v := by
+            rw [List.getD_eq_getElem _ _ hlt, List.getElem_idxOf hlt]
+          have hlen := G.length_vertices_le_encGraph
+          rw [KColoring.colorOf, countP_unaryBlocks (by rw [hget]; exact (e (f v)).isLt.le)
+            (Nat.mul_le_mul_left k (by omega)), hget]
+        refine ⟨w, length_unaryBlocks .., fun u hu => ⟨by rw [hcol u hu]; exact (e (f u)).isLt,
+          fun v hv => ?_⟩⟩
+        rw [hcol u hu, hcol v hv]
+        by_cases huv : G.toSimpleGraph.Adj u v
+        · right
+          have hmem := (hadj_mem c u v (e (f u)).isLt (e (f v)).isLt).mpr
+          have hfu : e.symm ⟨c u, (e (f u)).isLt⟩ = f u := by simp [c]
+          have hfv : e.symm ⟨c v, (e (f v)).isLt⟩ = f v := by simp [c]
+          rw [hfu, hfv] at hmem
+          exact ⟨(c u, c v), hmem (hf u hu v hv huv), rfl⟩
+        · exact Or.inl huv
+      · rintro ⟨w, -, hw⟩
+        let c := KColoring.colorOf k G.vertices w
+        let v0 : V := e.symm ⟨0, hkpos⟩
+        refine ⟨fun u => if hu : c u < k then e.symm ⟨c u, hu⟩ else v0,
+          fun u hu v hv huv => ?_⟩
+        have hcu : c u < k := (hw u hu).1
+        have hcv : c v < k := (hw v hv).1
+        rcases (hw u hu).2 v hv with hno | ⟨p, hp, hpeq⟩
+        · exact (hno huv).elim
+        · simp only [hcu, hcv, dite_true]
+          exact (hadj_mem c u v hcu hcv).mp (hpeq.symm ▸ hp)
+    have hpoly : ComputableInPolyTime verifier (encPair encGraph encBits) encBool := by
+      have hV : ComputableInPolyTime (fun x : Cslib.Complexity.Graph × List Bool => x.1.vertices)
+          (encPair encGraph encBits) (encList encNat) := by fun_prop
+      have hcol : ComputableInPolyTime
+          (fun p : (Cslib.Complexity.Graph × List Bool) × ℕ =>
+            KColoring.colorOf k p.1.1.vertices p.1.2 p.2)
+          (encPair (encPair encGraph encBits) encNat) encUnary :=
+        (KColoring.computableInPolyTime_colorOf k).comp
+          (g := fun p : (Cslib.Complexity.Graph × List Bool) × ℕ =>
+            ((p.1.1.vertices, p.1.2), p.2)) (by fun_prop)
+      have hproj : ComputableInPolyTime
+          (fun p : ((Cslib.Complexity.Graph × List Bool) × ℕ) × ℕ => ((p.1.1.1, p.1.2), p.2))
+          (encPair (encPair (encPair encGraph encBits) encNat) encNat)
+          (encPair (encPair encGraph encNat) encNat) := by fun_prop
+      have hproj' : ComputableInPolyTime
+          (fun p : ((Cslib.Complexity.Graph × List Bool) × ℕ) × ℕ => (p.1.1, p.2))
+          (encPair (encPair (encPair encGraph encBits) encNat) encNat)
+          (encPair (encPair encGraph encBits) encNat) := by fun_prop
+      have hpair : ComputableInPolyTime
+          (fun p : ((Cslib.Complexity.Graph × List Bool) × ℕ) × ℕ =>
+            (KColoring.colorOf k p.1.1.1.vertices p.1.1.2 p.1.2,
+             KColoring.colorOf k p.1.1.1.vertices p.1.1.2 p.2))
+          (encPair (encPair (encPair encGraph encBits) encNat) encNat)
+          (encPair encUnary encUnary) :=
+        (hcol.comp (fst _ _)).prod (hcol.comp hproj')
+      have hcheckAdj : ComputableInPolyTime
+          (fun p : ((Cslib.Complexity.Graph × List Bool) × ℕ) × ℕ =>
+            adjList.any fun q =>
+              decide ((KColoring.colorOf k p.1.1.1.vertices p.1.1.2 p.1.2,
+                       KColoring.colorOf k p.1.1.1.vertices p.1.1.2 p.2) = q))
+          (encPair (encPair (encPair encGraph encBits) encNat) encNat) encBool :=
+        anyConst adjList fun q _ => decide_eq' hpair (const (encOut := encPair encUnary encUnary) q)
+      exact allWithInput hV (bool_and' (unary_lt' hcol (const k))
+        (allWithInput (hV.comp (fst _ _)) (bool_not.comp
+          (bool_and' (Graph.computableInPolyTime_adjBool.comp hproj)
+            (bool_not.comp hcheckAdj)))))
+    exact ⟨_, verifier, hpoly, hVer⟩
+
+/-! ### Bipartite tractability (`HColoring H ∈ P`) and clique `NP`-completeness -/
+
+/-- For every bipartite simple graph `H`, `$H$-Coloring` is decidable in polynomial time
+(reducing to `TwoSAT ∈ P` when `H` has an edge, and checking edgelessness / empty vertex list
+otherwise). -/
+theorem HColoring.mem_P_of_isBipartite {V : Type*} {H : _root_.SimpleGraph V}
+    (hH : H.IsBipartite) : HColoring H ∈ P encGraph := by
+  classical
+  by_cases hEmpty : IsEmpty V
+  · refine ⟨fun G => G.vertices.all (fun _ => false),
+      allWithInput (by fun_prop) (const false), fun G => ?_⟩
+    simp only [HColoring, Set.mem_ofPred_eq, List.all_eq_true, Bool.false_eq_true]
+    constructor
+    · rintro ⟨φ⟩ u hu
+      exact isEmptyElim (φ ⟨u, hu⟩)
+    · intro hno
+      exact ⟨⟨fun u => False.elim (hno u.1 u.2), fun {u} => False.elim (hno u.1 u.2)⟩⟩
+  · have : Nonempty V := not_isEmpty_iff.mp hEmpty
+    by_cases hedge : ∃ u v : V, H.Adj u v
+    · -- `H` is bipartite with an edge: `HColoring H = KColoring 2`,
+      -- reduced in poly-time to `TwoSAT`.
+      rcases hedge with ⟨u0, v0, huv0⟩
+      rcases hH with ⟨col⟩
+      have hEq : HColoring H = KColoring 2 := by
+        ext G
+        rw [← hColoring_top_eq_kColoring 2]
+        constructor
+        · rintro ⟨φ⟩; exact ⟨col.comp φ⟩
+        · rintro ⟨ψ⟩
+          let emb : (⊤ : _root_.SimpleGraph (Fin 2)) →g H :=
+            { toFun := ![u0, v0]
+              map_rel' := fun {a b} hab => by
+                fin_cases a <;> fin_cases b
+                · exact (hab rfl).elim
+                · exact huv0
+                · exact huv0.symm
+                · exact (hab rfl).elim }
+          exact ⟨emb.comp ψ⟩
+      rw [hEq]
+      let to2SAT : Cslib.Complexity.Graph → CNF ℕ := fun G =>
+        (G.edges.filter fun e =>
+          decide (e.1 ≠ e.2) && decide (e.1 ∈ G.vertices) && decide (e.2 ∈ G.vertices)).flatMap
+          fun e => [[(e.1, true), (e.2, true)], [(e.1, false), (e.2, false)]]
+      have hpoly : ComputableInPolyTime to2SAT encGraph encCNF := by
+        unfold to2SAT encCNF
+        fun_prop
+      have hred : PolyTimeReducible encGraph encCNF (KColoring 2) TwoSAT := by
+        refine ⟨to2SAT, hpoly, fun G => ?_⟩
+        rw [mem_KColoring_iff, mem_TwoSAT]
+        constructor
+        · rintro ⟨c, hlt, hc⟩
+          refine ⟨fun cl hcl => ?_, ?_⟩
+          · simp only [to2SAT, List.mem_flatMap, List.mem_cons, List.not_mem_nil, or_false] at hcl
+            rcases hcl with ⟨e, _, rfl | rfl⟩ <;> simp
+          · refine ⟨fun v => decide (c v = 0), (CNF.eval_eq_true_iff _ _).mpr fun cl hcl => ?_⟩
+            simp only [to2SAT, List.mem_flatMap, List.mem_filter, Bool.and_eq_true,
+              decide_eq_true_eq, List.mem_cons, List.not_mem_nil, or_false] at hcl
+            rcases hcl with ⟨e, ⟨he, ⟨hne, hu⟩, hv⟩, rfl | rfl⟩
+            · have hdiff := hc e.1 hu e.2 hv (Graph.toSimpleGraph_adj.mpr ⟨hne, Or.inl he⟩)
+              have h1 := hlt e.1 hu; have h2 := hlt e.2 hv
+              rw [Clause.eval_eq_true_iff]
+              by_cases h0 : c e.1 = 0
+              · exact ⟨(e.1, true), by simp, by simp [h0]⟩
+              · have : c e.2 = 0 := by omega
+                exact ⟨(e.2, true), by simp, by simp [this]⟩
+            · have hdiff := hc e.1 hu e.2 hv (Graph.toSimpleGraph_adj.mpr ⟨hne, Or.inl he⟩)
+              have h1 := hlt e.1 hu; have h2 := hlt e.2 hv
+              rw [Clause.eval_eq_true_iff]
+              by_cases h0 : c e.1 = 0
+              · have : c e.2 ≠ 0 := by omega
+                exact ⟨(e.2, false), by simp, by simp [this]⟩
+              · exact ⟨(e.1, false), by simp, by simp [h0]⟩
+        · rintro ⟨_, τ, hτ⟩
+          have hall := (CNF.eval_eq_true_iff _ _).mp hτ
+          refine ⟨fun v => if τ v then 0 else 1, fun v _ => by cases h : τ v <;> simp [h],
+            fun u hu v hv huv => ?_⟩
+          rw [Graph.toSimpleGraph_adj] at huv
+          rcases huv with ⟨hne, he | he⟩
+          · have hmem : (u, v) ∈ G.edges.filter (fun e =>
+                decide (e.1 ≠ e.2) && decide (e.1 ∈ G.vertices) && decide (e.2 ∈ G.vertices)) :=
+              List.mem_filter.mpr ⟨he, by simp [hne, hu, hv]⟩
+            have hc1 := hall [(u, true), (v, true)]
+              (List.mem_flatMap.mpr ⟨(u, v), hmem, by simp⟩)
+            have hc2 := hall [(u, false), (v, false)]
+              (List.mem_flatMap.mpr ⟨(u, v), hmem, by simp⟩)
+            simp only [Clause.eval_eq_true_iff, List.mem_cons, List.not_mem_nil,
+              or_false] at hc1 hc2
+            cases htu : τ u <;> cases htv : τ v <;> simp [htu, htv] at hc1 hc2 ⊢
+          · have hmem : (v, u) ∈ G.edges.filter (fun e =>
+                decide (e.1 ≠ e.2) && decide (e.1 ∈ G.vertices) && decide (e.2 ∈ G.vertices)) :=
+              List.mem_filter.mpr ⟨he, by simp [hne.symm, hu, hv]⟩
+            have hc1 := hall [(v, true), (u, true)]
+              (List.mem_flatMap.mpr ⟨(v, u), hmem, by simp⟩)
+            have hc2 := hall [(v, false), (u, false)]
+              (List.mem_flatMap.mpr ⟨(v, u), hmem, by simp⟩)
+            simp only [Clause.eval_eq_true_iff, List.mem_cons, List.not_mem_nil,
+              or_false] at hc1 hc2
+            cases htu : τ u <;> cases htv : τ v <;> simp [htu, htv] at hc1 hc2 ⊢
+      exact hred.mem_P TwoSAT.mem_P
+    · -- `H` has no edges on a nonempty vertex set: `G ∈ HColoring H` iff `G.induced` has no edges.
+      push Not at hedge
+      let check : Cslib.Complexity.Graph → Bool := fun G =>
+        G.vertices.all fun u => G.vertices.all fun v => !G.adjBool u v
+      have hpoly : ComputableInPolyTime check encGraph encBool := by
+        have hV : ComputableInPolyTime (fun G : Cslib.Complexity.Graph => G.vertices)
+            encGraph (encList encNat) := by fun_prop
+        have hproj : ComputableInPolyTime
+            (fun p : (Cslib.Complexity.Graph × ℕ) × ℕ => ((p.1.1, p.1.2), p.2))
+            (encPair (encPair encGraph encNat) encNat)
+            (encPair (encPair encGraph encNat) encNat) := by fun_prop
+        exact allWithInput hV (allWithInput (hV.comp (fst _ _))
+          (bool_not.comp (Graph.computableInPolyTime_adjBool.comp hproj)))
+      refine ⟨check, hpoly, fun G => ?_⟩
+      rw [mem_HColoring_iff_of_nonempty]
+      simp only [check, List.all_eq_true, Bool.not_eq_true', Graph.adjBool_eq_false_iff]
+      constructor
+      · rintro ⟨f, hf⟩ u hu v hv huv
+        exact hedge (f u) (f v) (hf u hu v hv huv)
+      · intro hno
+        obtain ⟨v0⟩ := ‹Nonempty V›
+        exact ⟨fun _ => v0, fun u hu v hv huv => (hno u hu v hv huv).elim⟩
+
+/-- For every finite vertex set `V` with `|V| ≥ 3`, `$K_V$-Coloring` is `NP`-complete. -/
+theorem HColoring.npComplete_top {V : Type*} [Fintype V] (hcard : 3 ≤ Fintype.card V) :
+    NPComplete encGraph (HColoring (⊤ : _root_.SimpleGraph V)) := by
+  have hEq : HColoring (⊤ : _root_.SimpleGraph V) = KColoring (Fintype.card V) := by
+    ext G
+    rw [← hColoring_top_eq_kColoring]
+    let e : V ≃ Fin (Fintype.card V) := Fintype.equivFin V
+    constructor
+    · rintro ⟨φ⟩
+      exact ⟨⟨fun u => e (φ u), fun {u v} huv => e.injective.ne (φ.map_rel huv)⟩⟩
+    · rintro ⟨φ⟩
+      exact ⟨⟨fun u => e.symm (φ u), fun {u v} huv => e.symm.injective.ne (φ.map_rel huv)⟩⟩
+  rw [hEq]
+  exact KColoring_npComplete hcard
+
+/-! ### Polynomial-time equivalence between `CSP(E_H)` and `$H$-Coloring` -/
+
+/-- A fixed complete graph on `m` vertices (`0, ..., m - 1`). -/
+private def completeGraphList (m : ℕ) : Cslib.Complexity.Graph :=
+  let V := List.range m
+  ⟨V, V.flatMap fun u => (V.filter fun v => decide (u ≠ v)).map fun v => (u, v)⟩
+
+/-- `completeGraphList (Fintype.card V + 1)` is never `H`-colorable for any finite simple graph `H`.
+-/
+private theorem completeGraphList_not_mem_HColoring {V : Type*} [Fintype V]
+    (H : _root_.SimpleGraph V) : completeGraphList (Fintype.card V + 1) ∉ HColoring H := by
+  rintro ⟨φ⟩
+  have hinj : Function.Injective (fun i : Fin (Fintype.card V + 1) =>
+      φ ⟨i.val, by simp [completeGraphList, i.isLt]⟩) := by
+    intro i j hij
+    by_contra hne
+    have hval : i.val ≠ j.val := fun h => hne (Fin.ext h)
+    have hadj : (completeGraphList (Fintype.card V + 1)).induced.Adj
+        ⟨i.val, by simp [completeGraphList, i.isLt]⟩
+        ⟨j.val, by simp [completeGraphList, j.isLt]⟩ := by
+      simp only [Graph.induced_adj, Graph.toSimpleGraph_adj]
+      refine ⟨hval, Or.inl ?_⟩
+      simp only [completeGraphList, List.mem_flatMap, List.mem_map, List.mem_filter,
+        List.mem_range, decide_eq_true_eq, Prod.mk.injEq]
+      exact ⟨i.val, i.isLt, j.val, ⟨j.isLt, hval⟩, rfl, rfl⟩
+    have hEq : φ ⟨i.val, by simp [completeGraphList, i.isLt]⟩ =
+        φ ⟨j.val, by simp [completeGraphList, j.isLt]⟩ := hij
+    have hadj' := φ.map_rel hadj
+    rw [hEq] at hadj'
+    exact H.loopless.irrefl _ hadj'
+  have hle := Fintype.card_le_of_injective _ hinj
+  simp only [Fintype.card_fin] at hle
+  omega
+
+/-- Polynomial-time reduction from `CSP(E_H)` to `$H$-Coloring` (for nonempty `V`). -/
+theorem CSPRel.polyTimeReducible_edgeRel_hColoring {V : Type*} [Finite V] [Nonempty V]
+    (H : _root_.SimpleGraph V) :
+    PolyTimeReducible (encCSPInstance 2) encGraph (CSPRel (edgeRel H)) (HColoring H) := by
+  have : Fintype V := Fintype.ofFinite V
+  classical
+  let rejectG := completeGraphList (Fintype.card V + 1)
+  let f : CSPInstance 2 → Cslib.Complexity.Graph := fun I =>
+    let raw := I.toRaw
+    if raw.any (fun l => decide (l.getD 0 0 = l.getD 1 0)) then rejectG
+    else ⟨raw.flatten, raw.map fun l => (l.getD 0 0, l.getD 1 0)⟩
+  have hf_poly : ComputableInPolyTime f (encCSPInstance 2) encGraph := by
+    have hraw := computableInPolyTime_toRaw 2
+    have hloop : ComputableInPolyTime
+        (fun I : CSPInstance 2 => I.toRaw.any fun l => decide (l.getD 0 0 = l.getD 1 0))
+        (encCSPInstance 2) encBool :=
+      anyWithInput hraw (by fun_prop)
+    have hok : ComputableInPolyTime
+        (fun I : CSPInstance 2 =>
+          (⟨I.toRaw.flatten, I.toRaw.map fun l => (l.getD 0 0, l.getD 1 0)⟩ :
+            Cslib.Complexity.Graph))
+        (encCSPInstance 2) encGraph := by
+      have h1 : ComputableInPolyTime (fun I : CSPInstance 2 => I.toRaw.flatten)
+          (encCSPInstance 2) (encList encNat) := (flatten (enc := encNat)).comp hraw
+      have h2 : ComputableInPolyTime
+          (fun I : CSPInstance 2 => I.toRaw.map fun l => (l.getD 0 0, l.getD 1 0))
+          (encCSPInstance 2) (encList (encPair encNat encNat)) :=
+        mapWithInput hraw (by fun_prop)
+      exact encGraph_mk_polyTime h1 h2
+    exact hloop.ite (const rejectG) hok
+  refine ⟨f, hf_poly, fun I => ?_⟩
+  have hloop_iff : (I.toRaw.any fun l => decide (l.getD 0 0 = l.getD 1 0)) = true ↔
+      ∃ t ∈ I, t 0 = t 1 := by
+    simp only [CSPInstance.toRaw, List.any_eq_true, List.mem_map, decide_eq_true_eq]
+    constructor
+    · rintro ⟨l, ⟨t, ht, rfl⟩, hEq⟩
+      exact ⟨t, ht, by simpa using hEq⟩
+    · rintro ⟨t, ht, hEq⟩
+      exact ⟨List.ofFn t, ⟨t, ht, rfl⟩, by simpa using hEq⟩
+  dsimp only [f]
+  split_ifs with hloop
+  · have ⟨t, ht, htEq⟩ := hloop_iff.mp hloop
+    refine ⟨fun ⟨σ, hσ⟩ => ?_, fun h => (completeGraphList_not_mem_HColoring H h).elim⟩
+    have hadj : H.Adj (σ (t 0)) (σ (t 1)) := hσ t ht
+    rw [htEq] at hadj
+    exact (H.loopless.irrefl _ hadj).elim
+  · have hno : ∀ t ∈ I, t 0 ≠ t 1 := fun t ht heq => hloop (hloop_iff.mpr ⟨t, ht, heq⟩)
+    rw [mem_HColoring_iff_of_nonempty]
     constructor
     · rintro ⟨σ, hσ⟩
-      let τ : ℕ → Bool := fun n ↦ decide ((eD (σ (n / s))).1 = n % s)
-      refine ⟨τ, ?_⟩
-      simp only [Cslib.Logic.PL.CSP.eval, List.all_eq_true] at hσ ⊢
-      have hchunk : ∀ v, (List.range s).map (fun j ↦ τ (s * v + j)) =
-          (List.range s).map fun j ↦ decide ((eD (σ v)).1 = j) := fun v ↦
-        List.map_congr_left fun j hj ↦ by
-          have hjs := List.mem_range.mp hj
-          have hd : (s * v + j) / s = v := by
-            rw [add_comm, Nat.add_mul_div_left j v hs, Nat.div_eq_of_lt hjs, zero_add]
-          have hm : (s * v + j) % s = j := by
-            rw [add_comm, Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt hjs]
-          simp only [τ, hd, hm]
-      intro c' hc'
-      simp only [compile, List.mem_flatMap, compileConstraint, List.mem_cons,
-        List.mem_map] at hc'
-      obtain ⟨c, hc, rfl | ⟨v, _, rfl⟩⟩ := hc'
-      · simp only [Constraint.eval, bSem, Sum.elim_inl, ← hF c hc]
-        have hdec := decodeOneHotTuple_map_block c.scope τ (fun v ↦ eD (σ v)) fun v _ ↦ by
-          rw [hchunk v, decodeOneHot_tabulate]
-        change (match decodeOneHotTuple s c.scope.length
-              ((c.scope.flatMap fun v ↦ (List.range s).map fun j ↦ s * v + j).map τ) with
-            | some ds => Γ.sem c.rel (ds.map eD.symm)
-            | none => false) = true
-        rw [hdec]; dsimp only; rw [List.map_map]
-        rw [show List.map (eD.symm ∘ fun v ↦ eD (σ v)) c.scope = c.scope.map σ from
-          List.map_congr_left fun v _ ↦ eD.symm_apply_apply (σ v)]
-        exact hσ c hc
-      · have hbm : (block v).map τ = (List.range s).map fun j ↦ τ (s * v + j) := by
-          simp [block, List.map_map, Function.comp_def]
-        change (decodeOneHot s ((block v).map τ)).isSome = true
-        rw [hbm, hchunk v, decodeOneHot_tabulate]; rfl
-    · rintro ⟨τ, hτ⟩
-      simp only [Cslib.Logic.PL.CSP.eval, List.all_eq_true] at hτ
-      let pick : ℕ → Fin s := fun v ↦
-        (decodeOneHot s ((List.range s).map fun j ↦ τ (s * v + j))).getD (eD d₀)
-      refine ⟨fun v ↦ eD.symm (pick v), ?_⟩
-      simp only [Cslib.Logic.PL.CSP.eval, List.all_eq_true]
-      intro c hc
-      have hpick : ∀ v ∈ c.scope,
-          decodeOneHot s ((List.range s).map fun j ↦ τ (s * v + j)) = some (pick v) := by
-        intro v hv
-        have his := hτ ⟨Sum.inr (), block v⟩
-          (List.mem_flatMap.mpr ⟨c, hc, List.mem_cons_of_mem _ (List.mem_map.mpr ⟨v, hv, rfl⟩)⟩)
-        have hbm : (block v).map τ = (List.range s).map fun j ↦ τ (s * v + j) := by
-          simp [block, List.map_map, Function.comp_def]
-        change (decodeOneHot s ((block v).map τ)).isSome = true at his
-        rw [hbm] at his
-        obtain ⟨idx, hidx⟩ := Option.isSome_iff_exists.mp his
-        simp only [pick, hidx, Option.getD_some]
-      have hmain := hτ ⟨Sum.inl c.rel, c.scope.flatMap block⟩
-        (List.mem_flatMap.mpr ⟨c, hc, List.mem_cons_self⟩)
-      have hdec := decodeOneHotTuple_map_block c.scope τ pick hpick
-      change (match decodeOneHotTuple s (Γ.arity c.rel)
-            ((c.scope.flatMap fun v ↦ (List.range s).map fun j ↦ s * v + j).map τ) with
-          | some ds => Γ.sem c.rel (ds.map eD.symm)
-          | none => false) = true at hmain
-      rw [← hF c hc, hdec] at hmain
-      simpa only [Constraint.eval, List.map_map, Function.comp_def] using hmain
-  exact hred.mem_NP (CSPSAT.mem_NP encBRel bArity bSem)
+      refine ⟨σ, fun u _ v _ huv => ?_⟩
+      rw [Graph.toSimpleGraph_adj] at huv
+      rcases huv with ⟨hne, h1 | h2⟩
+      · rcases List.mem_map.mp h1 with ⟨l, hl, hEq⟩
+        rcases List.mem_map.mp hl with ⟨t, ht, rfl⟩
+        have h0 : t 0 = u := by simpa using congrArg Prod.fst hEq
+        have h1' : t 1 = v := by simpa using congrArg Prod.snd hEq
+        rw [← h0, ← h1']
+        exact hσ t ht
+      · rcases List.mem_map.mp h2 with ⟨l, hl, hEq⟩
+        rcases List.mem_map.mp hl with ⟨t, ht, rfl⟩
+        have h0 : t 0 = v := by simpa using congrArg Prod.fst hEq
+        have h1' : t 1 = u := by simpa using congrArg Prod.snd hEq
+        rw [← h0, ← h1']
+        exact (hσ t ht).symm
+    · rintro ⟨σ, hσ⟩
+      refine ⟨σ, fun t ht => ?_⟩
+      have hm0 : t 0 ∈ I.toRaw.flatten :=
+        List.mem_flatten.mpr ⟨List.ofFn t, List.mem_map.mpr ⟨t, ht, rfl⟩,
+          List.mem_ofFn.mpr ⟨0, rfl⟩⟩
+      have hm1 : t 1 ∈ I.toRaw.flatten :=
+        List.mem_flatten.mpr ⟨List.ofFn t, List.mem_map.mpr ⟨t, ht, rfl⟩,
+          List.mem_ofFn.mpr ⟨1, rfl⟩⟩
+      have hedge : (t 0, t 1) ∈ I.toRaw.map (fun l => (l.getD 0 0, l.getD 1 0)) :=
+        List.mem_map.mpr ⟨List.ofFn t, List.mem_map.mpr ⟨t, ht, rfl⟩, by simp⟩
+      exact hσ (t 0) hm0 (t 1) hm1 (Graph.toSimpleGraph_adj.mpr ⟨hno t ht, Or.inl hedge⟩)
 
-/-- Every fixed-template CSP preserved by a common unary constant lies in `P`. -/
-theorem cspsat_mem_P_of_unaryConst [Finite Rel] (Γ : Language D Rel)
-    (encRel : Rel ↪ List Bool) (b : D)
-    (hb : Γ.HasPolymorphism (fun _ : Fin 1 → D ↦ b)) :
-    Γ.cspsat ∈ P (encCSP encRel encNat) := by
+/-- Polynomial-time reduction from `$H$-Coloring` to `CSP(E_H)` (for nonempty `V`). -/
+theorem HColoring.polyTimeReducible_cspRel_edgeRel {V : Type*} [Nonempty V]
+    (H : _root_.SimpleGraph V) :
+    PolyTimeReducible encGraph (encCSPInstance 2) (HColoring H) (CSPRel (edgeRel H)) := by
   classical
-  let possible : Rel → Bool := fun r ↦ decide (Γ.relation r).Nonempty
-  let solver : CSP Rel ℕ → Bool := fun F ↦ F.validArity Γ.arity && F.all fun c ↦ possible c.rel
-  have hpoly : ComputableInPolyTime solver (encCSP encRel encNat) encBool :=
-    ComputableInPolyTime.bool_and.comp
-      ((Cslib.Complexity.CSP.computableInPolyTime_validArity encRel Γ.arity).prod
-        (ComputableInPolyTime.allWithInput ComputableInPolyTime.id'
-          ((ComputableInPolyTime.of_finite possible).comp
-            (encConstraint_rel_polyTime (ComputableInPolyTime.snd _ _)))))
-  refine ⟨solver, hpoly, fun F ↦ ?_⟩
-  simp only [mem_cspsat_iff, solver, Bool.and_eq_true, Cslib.Logic.PL.CSP.validArity_eq_true_iff,
-    List.all_eq_true, possible, decide_eq_true_eq]
-  refine ⟨fun ⟨hF, σ, hσ⟩ ↦ ⟨hF, fun c hc ↦
-    ⟨_, (Γ.csp_eval_eq_true_iff hF σ 0).mp hσ c hc⟩⟩, ?_⟩
-  rintro ⟨hF, hpos⟩
-  refine ⟨hF, fun _ ↦ b, (Γ.csp_eval_eq_true_iff hF (fun _ ↦ b) 0).mpr fun c hc ↦ ?_⟩
-  obtain ⟨a, ha⟩ := hpos c hc
-  exact hb c.rel (fun _ ↦ a) fun _ ↦ ha
-
-/-- Every fixed-template CSP on a 1-element domain admits a WNU polymorphism and lies in `P`. -/
-theorem cspsat_mem_P_of_subsingleton [Subsingleton D] [Nonempty D] [Finite Rel]
-    (Γ : Language D Rel) (encRel : Rel ↪ List Bool) :
-    Γ.AdmitsWNU ∧ Γ.cspsat ∈ P (encCSP encRel encNat) := by
-  obtain ⟨b⟩ := ‹Nonempty D›
-  have hpol : ∀ m : ℕ, 0 < m → Γ.HasPolymorphism (fun _ : Fin m → D ↦ b) := by
-    intro m hm r a ha
-    rw [show (fun _ : Fin (Γ.arity r) ↦ b) = a ⟨0, hm⟩ from
-      funext fun _ ↦ Subsingleton.elim _ _]
-    exact ha ⟨0, hm⟩
-  exact ⟨⟨2, fun _ ↦ b, isWeakNearUnanimity_const le_rfl b, hpol 2 Nat.zero_lt_two⟩,
-    Γ.cspsat_mem_P_of_unaryConst encRel b (hpol 1 Nat.zero_lt_one)⟩
-
-/-- On `Bool`, admitting a WNU polymorphism is equivalent to admitting a Schaefer polymorphism. -/
-theorem bool_admitsWNU_iff_hasSchaefer {Rel : Type v} (Γ : Language Bool Rel) :
-    Γ.AdmitsWNU ↔ Cslib.Logic.PL.CSP.HasSchaeferPolymorphism Γ.arity Γ.sem := by
+  let gRaw : Cslib.Complexity.Graph → List (List ℕ) := fun G =>
+    (G.edges.filter fun e =>
+      decide (e.1 ≠ e.2) && decide (e.1 ∈ G.vertices) && decide (e.2 ∈ G.vertices)).map
+      fun e => [e.1, e.2]
+  have hgRaw_poly : ComputableInPolyTime gRaw encGraph (encList (encList encNat)) := by
+    unfold gRaw
+    fun_prop
+  have hgRaw_len : ∀ G, ∀ l ∈ gRaw G, l.length = 2 := by
+    intro G l hl
+    simp only [gRaw, List.mem_map] at hl
+    rcases hl with ⟨e, _, rfl⟩
+    rfl
+  refine ⟨fun G => CSPInstance.ofRaw 2 (gRaw G),
+    computableInPolyTime_ofRaw_comp 2 hgRaw_poly hgRaw_len, fun G => ?_⟩
+  rw [mem_HColoring_iff_of_nonempty]
+  simp only [CSPRel, Set.mem_ofPred_eq, CSPInstance.ofRaw, gRaw, List.map_map, List.mem_map,
+    List.mem_filter, Bool.and_eq_true, decide_eq_true_eq, mem_edgeRel_iff]
   constructor
-  · rintro ⟨m, f, hwnu, hpol⟩
-    by_contra hns
-    obtain ⟨i, rfl | rfl⟩ :=
-      Cslib.Logic.PL.CSP.projection_or_negation_of_not_hasSchaeferPolymorphism
-        Γ.arity Γ.sem hns hwnu.pos hpol
-    · exact not_isWeakNearUnanimity_proj i hwnu
-    · exact not_isWeakNearUnanimity_negProj i hwnu
-  · rintro (h | h | h | h | h | h)
-    · exact ⟨2, fun _ ↦ false, isWeakNearUnanimity_const le_rfl false,
-        fun r a ha ↦ h r (fun _ ↦ a 0) fun _ ↦ ha 0⟩
-    · exact ⟨2, fun _ ↦ true, isWeakNearUnanimity_const le_rfl true,
-        fun r a ha ↦ h r (fun _ ↦ a 0) fun _ ↦ ha 0⟩
-    · exact ⟨2, fun a ↦ a 0 && a 1,
-        isWeakNearUnanimity_binary_of_comm Bool.and Bool.and_comm, h⟩
-    · exact ⟨2, fun a ↦ a 0 || a 1,
-        isWeakNearUnanimity_binary_of_comm Bool.or Bool.or_comm, h⟩
-    · refine ⟨3, Cslib.majority 3, isWeakNearUnanimity_of_majority ?_ ?_ ?_, h⟩ <;>
-        (intro x y; cases x <;> cases y <;> decide)
-    · refine ⟨3, Cslib.parity 3, isWeakNearUnanimity_of_minority ?_ ?_ ?_, h⟩ <;>
-        (intro x y; cases x <;> cases y <;> decide)
+  · rintro ⟨σ, hσ⟩
+    refine ⟨σ, ?_⟩
+    rintro t ⟨e, ⟨he, ⟨hne, hu⟩, hv⟩, rfl⟩
+    exact hσ e.1 hu e.2 hv (Graph.toSimpleGraph_adj.mpr ⟨hne, Or.inl he⟩)
+  · rintro ⟨σ, hσ⟩
+    refine ⟨σ, fun u hu v hv huv => ?_⟩
+    rw [Graph.toSimpleGraph_adj] at huv
+    rcases huv with ⟨hne, h1 | h2⟩
+    · exact hσ _ ⟨(u, v), ⟨h1, ⟨hne, hu⟩, hv⟩, rfl⟩
+    · exact (hσ _ ⟨(v, u), ⟨h2, ⟨hne.symm, hv⟩, hu⟩, rfl⟩).symm
 
-/-- Complete Boolean WNU complexity dichotomy via Schaefer's theorem. -/
-theorem bool_cspsat_dichotomy [Finite Rel] (Γ : Language Bool Rel) (encRel : Rel ↪ List Bool) :
-    (Γ.AdmitsWNU → Γ.cspsat ∈ P (encCSP encRel encNat)) ∧
-      (¬ Γ.AdmitsWNU → NPComplete (encCSP encRel encNat) Γ.cspsat) := by
-  rw [Γ.bool_admitsWNU_iff_hasSchaefer, Γ.bool_cspsat_eq]
-  exact CSPSAT.schaefer_dichotomy encRel Γ.arity Γ.sem
-
-/-- The positive ternary Boolean not-all-equal language `NAE₃`. -/
-def boolNAE3 : Language Bool Unit where
-  arity _ := 3
-  sem _ l :=
-    match l with
-    | [x, y, z] => !(x == y && y == z)
-    | _ => false
-
-/-- `boolNAE3` admits no weak near-unanimity polymorphism. -/
-theorem not_admitsWNU_boolNAE3 : ¬ boolNAE3.AdmitsWNU := by
-  rw [boolNAE3.bool_admitsWNU_iff_hasSchaefer]
-  have hmem : ∀ x y z : Bool,
-      ![x, y, z] ∈ Cslib.Logic.PL.CSP.booleanRelation boolNAE3.arity boolNAE3.sem () ↔
-        (!(x == y && y == z)) = true := fun _ _ _ ↦ Iff.rfl
-  rintro (h | h | h | h | h | h)
-  · exact Bool.false_ne_true (h () (fun _ ↦ ![true, false, false]) fun _ ↦ (hmem _ _ _).mpr rfl)
-  · exact Bool.false_ne_true (h () (fun _ ↦ ![true, false, false]) fun _ ↦ (hmem _ _ _).mpr rfl)
-  · exact Bool.false_ne_true (h () ![![true, false, false], ![false, true, false]] fun i ↦ by
-      fin_cases i <;> exact (hmem _ _ _).mpr rfl)
-  · exact Bool.false_ne_true (h () ![![true, true, false], ![true, false, true]] fun i ↦ by
-      fin_cases i <;> exact (hmem _ _ _).mpr rfl)
-  · exact Bool.false_ne_true (h () ![![true, true, false], ![true, false, true],
-      ![false, true, true]] fun i ↦ by fin_cases i <;> exact (hmem _ _ _).mpr rfl)
-  · exact Bool.false_ne_true (h () ![![true, false, false], ![false, true, false],
-      ![false, false, true]] fun i ↦ by fin_cases i <;> exact (hmem _ _ _).mpr rfl)
-
-/-- `CSP(boolNAE3)` is `NP`-complete. -/
-theorem cspsat_npComplete_boolNAE3 (encRel : Unit ↪ List Bool) :
-    NPComplete (encCSP encRel encNat) boolNAE3.cspsat :=
-  (boolNAE3.bool_cspsat_dichotomy encRel).2 not_admitsWNU_boolNAE3
-
-end Complexity
-
-end Language
-
-end CslibFrontier.Complexity.FiniteCSP
+end Cslib.Complexity
