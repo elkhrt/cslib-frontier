@@ -1,525 +1,466 @@
 /-
-Copyright (c) 2026 FormalPapers Contributors. All rights reserved.
+Copyright (c) 2026 Google LLC. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
-Authors: FormalPapers Contributors
+Authors: Google LLC
 -/
 
 module
 -- upstream: candidate
 
-public import CslibFrontier.Init
-public import CslibFrontier.Computability.Complexity.Parameterized
-public import CslibFrontier.Computability.Complexity.Parameterized.WHierarchy
-public import CslibFrontier.Computability.Complexity.Parameterized.WHierarchy.TwoCSP
-public import CslibFrontier.Computability.Machines.Turing.MultiTape.Encodings.Structure
-public import Mathlib.Combinatorics.SimpleGraph.Clique
-public import Mathlib.Data.Finset.Card
-
+public import CslibFrontier.Computability.Complexity.Parameterized.WHierarchy.Clique
+public import CslibFrontier.Computability.Complexity.Problems.Graph.VertexColors
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.List
+import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Membership
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat
+import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat.Binary
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Plain
-import CslibFrontier.Tactic.PolyTime
-import Mathlib.Data.List.GetD
 
 /-!
-# Multicolored `k`-Clique and `W[1]`-Completeness
+# Multicolored Clique: `W[1]`-Completeness and `NP`-Completeness
 
-Canonical framed unary carrier (`MulticoloredCliqueInstance`, `encMulticoloredClique`) for
-`k`-partite multicolored clique instances, together with polynomial-time fpt-reductions to and
-from `FinTwoCSP`, establishing `W[1]`-completeness.
+Under standard Lean axioms, this module formalizes the parameterized **Multicolored Clique**
+(`k`-Colored Clique) problem and proves its equivalence with `Cslib.Complexity.Clique` under both
+polynomial-time
+many-one reductions and parameter-preserving FPT reductions:
+
+1. **Multicolored Clique (`MulticoloredCliqueInstance`, `MulticoloredClique`)**: given an undirected
+   graph `G`, a vertex coloring list `colors`, and an integer `k`, decide whether `G` contains `k`
+   pairwise adjacent declared vertices `v_0, …, v_{k-1}` with `colorOf G colors v_i = i`.
+2. **Reduction from `Clique` (`cliqueToMulticoloredClique`)**: duplicating `V(G)` into `k` color
+   classes (when `k ≤ |V(G)|`, and outputting an empty graph otherwise) runs in polynomial time,
+   preserves `k`, and proves `MulticoloredClique` is `W[1]`-hard and `NP`-hard.
+3. **Reduction to `Clique` (`multicoloredCliqueToClique`)**: retaining only properly colored edges
+   between color classes `< k` runs in polynomial time, preserves `k`, and proves
+   `MulticoloredClique ∈ W[1]` and `MulticoloredClique ∈ NP`.
 
 ## Main definitions
 
-* `Cslib.Complexity.MulticoloredCliqueInstance`, `Cslib.Complexity.encMulticoloredClique`.
-* `Cslib.Complexity.MulticoloredCliqueInstance.toSimpleGraph`,
-  `Cslib.Complexity.MulticoloredCliqueInstance.HasMulticoloredClique`,
-  `Cslib.Complexity.MulticoloredCliqueInstance.HasCliqueOfCard`,
-  `Cslib.Complexity.MulticoloredCliqueInstance.Language`.
-* `Cslib.Complexity.MulticoloredCliqueInstance.toFinTwoCSP`,
-  `Cslib.Complexity.MulticoloredCliqueInstance.ofFinTwoCSP`.
+* `Cslib.Complexity.MulticoloredCliqueInstance`,
+  `Cslib.Complexity.encMulticoloredClique`: instances `(graph, colors, k)` and their
+  framed binary encoding.
+* `Cslib.Complexity.MulticoloredClique`: the Multicolored Clique decision problem.
+* `Cslib.Complexity.cliqueToMulticoloredClique`,
+  `Cslib.Complexity.multicoloredCliqueToClique`: parameter-preserving
+  polynomial-time reductions between `Clique` and `MulticoloredClique`.
 
 ## Main results
 
-* `Cslib.Complexity.MulticoloredCliqueInstance.hasMulticoloredClique_iff_hasCliqueOfCard`,
-  `Cslib.Complexity.MulticoloredCliqueInstance.not_hasCliqueOfCard_iff_cliqueNum_lt`.
-* `Cslib.Complexity.fptReducible_multicoloredClique_finTwoCSP`,
-  `Cslib.Complexity.fptReducible_finTwoCSP_multicoloredClique`,
-  `Cslib.Complexity.multicoloredClique_wHard`,
-  `Cslib.Complexity.W_one_eq_FPT_iff_multicoloredClique`.
+* `Cslib.Complexity.mem_multicoloredClique_iff_finset`: characterization as a
+  `k`-clique whose image under `colorOf` equals `Finset.range k`.
+* `Cslib.Complexity.cliqueToMulticoloredClique_mem_iff`,
+  `Cslib.Complexity.multicoloredCliqueToClique_mem_iff`: correctness of both
+  reductions.
+* `Cslib.Complexity.multicoloredClique_wHard`,
+  `Cslib.Complexity.multicoloredClique_mem_W`: `W[1]`-completeness.
+* `Cslib.Complexity.multicoloredClique_npComplete`: `NP`-completeness.
+
+## Tags
+
+multicolored clique, parameterized complexity, W[1]-completeness, FPT reduction
 -/
 
 public section
 
+open Cslib.Complexity Turing.MultiTapeTM ComputableInPolyTime
+
 namespace Cslib.Complexity
 
-open Turing.MultiTapeTM
+/-! ### 1. Problem Definition and Equivalences -/
 
-/-- Canonical encoded carrier for multicolored `k`-clique instances: a `k`-partite graph with color
-classes of cardinalities `partSizes`, and inter-color edge list `edges` where each entry
-`((i, u), (j, v))` connects vertex `u` in color `i` to vertex `v` in color `j`. -/
+/-- An instance `(graph, colors, k)` of **Multicolored Clique**. -/
 @[ext]
 structure MulticoloredCliqueInstance where
-  /-- Cardinalities of the color classes `0, …, partSizes.length - 1`. -/
-  partSizes : List ℕ
-  /-- Inter-color edges `((i, u), (j, v))`. -/
-  edges : List ((ℕ × ℕ) × (ℕ × ℕ))
-deriving DecidableEq, Repr
+  /-- Underlying undirected graph. -/
+  graph : Graph
+  /-- Vertex colors listed parallel to `graph.vertices` (read via `Cslib.Complexity.colorOf`). -/
+  colors : List ℕ
+  /-- Number of color classes / target clique size. -/
+  k : ℕ
+  deriving DecidableEq, Repr, Inhabited
 
-/-- Framed unary encoding of `MulticoloredCliqueInstance`. -/
+/-- Framed binary encoding of `MulticoloredCliqueInstance`. -/
 enc_structure encMulticoloredClique : MulticoloredCliqueInstance where
-  partSizes : (encList encUnary),
-  edges : (encList (encPair (encPair encUnary encUnary) (encPair encUnary encUnary)))
+  graph : encGraph,
+  colors : (encList encNat),
+  k : encNat
 
-attribute [fun_prop] encMulticoloredClique_partSizes_polyTime
-  encMulticoloredClique_edges_polyTime encMulticoloredClique_mk_polyTime
+/-- **Multicolored Clique**: instances admitting `k` pairwise adjacent declared vertices
+`f 0, …, f (k - 1)` with `colorOf x.graph x.colors (f i) = i`. -/
+def MulticoloredClique : Set MulticoloredCliqueInstance :=
+  {x | ∃ f : Fin x.k → ℕ,
+    (∀ i : Fin x.k, f i ∈ x.graph.vertices ∧ colorOf x.graph x.colors (f i) = i.1) ∧
+    ∀ i j : Fin x.k, i ≠ j → x.graph.toSimpleGraph.Adj (f i) (f j)}
 
-namespace MulticoloredCliqueInstance
+/-- Unfolding characterization of `MulticoloredClique`. -/
+theorem mem_multicoloredClique_iff {x : MulticoloredCliqueInstance} :
+    x ∈ MulticoloredClique ↔
+      ∃ f : Fin x.k → ℕ,
+        (∀ i : Fin x.k, f i ∈ x.graph.vertices ∧ colorOf x.graph x.colors (f i) = i.1) ∧
+        ∀ i j : Fin x.k, i ≠ j → x.graph.toSimpleGraph.Adj (f i) (f j) := by
+  unfold MulticoloredClique; rfl
 
-/-- Number of color classes `k = G.partSizes.length`. -/
-@[expose]
-def numColors (G : MulticoloredCliqueInstance) : ℕ := G.partSizes.length
-
-/-- Disjoint-union vertex type `Σ i : Fin G.numColors, Fin G.partSizes[i]` of `G`. -/
-abbrev Vertex (G : MulticoloredCliqueInstance) : Type :=
-  Σ i : Fin G.numColors, Fin G.partSizes[i.1]
-
-/-- Total number of vertices `G.partSizes.sum`. -/
-@[expose]
-def totalVertices (G : MulticoloredCliqueInstance) : ℕ := G.partSizes.sum
-
-/-- Underlying `k`-partite `SimpleGraph G.Vertex`: two vertices from distinct color classes are
-adjacent iff an edge between them appears in `G.edges` in either orientation. -/
-@[expose]
-def toSimpleGraph (G : MulticoloredCliqueInstance) : SimpleGraph G.Vertex where
-  Adj x y := x.1 ≠ y.1 ∧
-    ((((x.1 : ℕ), (x.2 : ℕ)), ((y.1 : ℕ), (y.2 : ℕ))) ∈ G.edges ∨
-      (((y.1 : ℕ), (y.2 : ℕ)), ((x.1 : ℕ), (x.2 : ℕ))) ∈ G.edges)
-  symm := ⟨fun _ _ ⟨hne, h⟩ => ⟨hne.symm, h.symm⟩⟩
-  loopless := ⟨fun _ ⟨hne, _⟩ => hne rfl⟩
-
-/-- Decidable adjacency on `G.toSimpleGraph`. -/
-instance instDecidableRelToSimpleGraphAdj (G : MulticoloredCliqueInstance) :
-    DecidableRel G.toSimpleGraph.Adj := fun x y =>
-  inferInstanceAs (Decidable (x.1 ≠ y.1 ∧
-    ((((x.1 : ℕ), (x.2 : ℕ)), ((y.1 : ℕ), (y.2 : ℕ))) ∈ G.edges ∨
-      (((y.1 : ℕ), (y.2 : ℕ)), ((x.1 : ℕ), (x.2 : ℕ))) ∈ G.edges)))
-
-/-- Every color class `{v : G.Vertex | v.1 = i}` is an independent set in `G.toSimpleGraph`. -/
-theorem isIndepSet_colorClass (G : MulticoloredCliqueInstance) (i : Fin G.numColors) :
-    G.toSimpleGraph.IsIndepSet {v : G.Vertex | v.1 = i} := by
-  intro x hx y hy _ hadj
-  rw [Set.mem_ofPred_eq] at hx hy
-  exact hadj.1 (hx.trans hy.symm)
-
-/-- A choice tuple `c : ∀ i, Fin G.partSizes[i]` is a multicolored `k`-clique if every pair of
-strictly ordered color classes `i < j` is adjacent in `G.toSimpleGraph`. -/
-@[expose]
-def IsMulticoloredClique (G : MulticoloredCliqueInstance)
-    (c : ∀ i : Fin G.numColors, Fin G.partSizes[i.1]) : Prop :=
-  ∀ (i j : Fin G.numColors), i < j → G.toSimpleGraph.Adj ⟨i, c i⟩ ⟨j, c j⟩
-
-/-- Existence of a multicolored `k`-clique in `G`. -/
-@[expose]
-def HasMulticoloredClique (G : MulticoloredCliqueInstance) : Prop :=
-  ∃ c : ∀ i : Fin G.numColors, Fin G.partSizes[i.1], G.IsMulticoloredClique c
-
-/-- Decision problem of multicolored `k`-clique instances admitting a multicolored `k`-clique. -/
-@[expose]
-def Language : Set MulticoloredCliqueInstance := {G | G.HasMulticoloredClique}
-
-/-- Existence of a clique of exact cardinality `s` in `G.toSimpleGraph`. -/
-@[expose]
-def HasCliqueOfCard (G : MulticoloredCliqueInstance) (s : ℕ) : Prop :=
-  ∃ S : Finset G.Vertex, G.toSimpleGraph.IsNClique s S
-
-private lemma injOn_fst_of_isClique {G : MulticoloredCliqueInstance} {S : Finset G.Vertex}
-    (hS : G.toSimpleGraph.IsClique (S : Set G.Vertex)) :
-    Set.InjOn Sigma.fst (S : Set G.Vertex) :=
-  fun x hx y hy hcol => by
-    by_contra hne
-    exact G.isIndepSet_colorClass x.1 rfl hcol.symm hne (hS hx hy hne)
-
-/-- Every clique `S` in `G.toSimpleGraph` contains at most one vertex per color class, so
-`S.card ≤ G.numColors`. -/
-theorem card_le_numColors_of_isClique (G : MulticoloredCliqueInstance) {S : Finset G.Vertex}
-    (hS : G.toSimpleGraph.IsClique (S : Set G.Vertex)) : S.card ≤ G.numColors :=
-  (Finset.card_image_of_injOn (injOn_fst_of_isClique hS)).symm.le.trans
-    ((Finset.card_le_univ _).trans (Fintype.card_fin G.numColors).le)
-
-/-- The clique number of `G.toSimpleGraph` is at most `G.numColors`. -/
-theorem cliqueNum_le_numColors (G : MulticoloredCliqueInstance) :
-    G.toSimpleGraph.cliqueNum ≤ G.numColors := by
-  rcases G.toSimpleGraph.exists_isNClique_cliqueNum with ⟨S, hS⟩
-  exact hS.card_eq ▸ G.card_le_numColors_of_isClique hS.isClique
-
-/-- Downward monotonicity of `HasCliqueOfCard`. -/
-theorem hasCliqueOfCard_mono (G : MulticoloredCliqueInstance) {s₁ s₂ : ℕ}
-    (h : G.HasCliqueOfCard s₂) (hs : s₁ ≤ s₂) : G.HasCliqueOfCard s₁ := by
-  rcases h with ⟨S, hS⟩
-  obtain ⟨T, hTS, hcard⟩ := Finset.exists_subset_card_eq (hS.card_eq ▸ hs)
-  exact ⟨T, hS.isClique.subset (Finset.coe_subset.mpr hTS), hcard⟩
-
-/-- A `k`-partite graph `G` has a multicolored `k`-clique iff `G.toSimpleGraph` has a clique of
-cardinality `G.numColors`. -/
-theorem hasMulticoloredClique_iff_hasCliqueOfCard (G : MulticoloredCliqueInstance) :
-    G.HasMulticoloredClique ↔ G.HasCliqueOfCard G.numColors := by
+/-- Finset characterization of `MulticoloredClique`: a `k`-clique of declared vertices whose colors
+span `Finset.range x.k`. -/
+theorem mem_multicoloredClique_iff_finset {x : MulticoloredCliqueInstance} :
+    x ∈ MulticoloredClique ↔
+      ∃ S : Finset ℕ, (∀ v ∈ S, v ∈ x.graph.vertices) ∧
+        x.graph.toSimpleGraph.IsNClique x.k S ∧
+        S.image (colorOf x.graph x.colors) = Finset.range x.k := by
+  classical
   constructor
-  · rintro ⟨c, hc⟩
-    let emb : Fin G.numColors ↪ G.Vertex := ⟨fun i => ⟨i, c i⟩, fun _ _ h => (Sigma.mk.inj h).1⟩
-    refine ⟨Finset.univ.map emb, fun x hx y hy hne => ?_, by simp⟩
-    rcases Finset.mem_map.mp hx with ⟨i, -, rfl⟩
-    rcases Finset.mem_map.mp hy with ⟨j, -, rfl⟩
-    rcases lt_or_gt_of_ne (fun h : i = j => hne (congrArg emb h)) with hij | hji
-    · exact hc i j hij
-    · exact (hc j i hji).symm
-  · rintro ⟨S, hS⟩
-    have himg : S.image Sigma.fst = Finset.univ := Finset.eq_univ_of_card _
-      (by rw [Finset.card_image_of_injOn (injOn_fst_of_isClique hS.isClique),
-              hS.card_eq, Fintype.card_fin])
-    have hex : ∀ i : Fin G.numColors, ∃ u, (⟨i, u⟩ : G.Vertex) ∈ S := fun i => by
-      rcases Finset.mem_image.mp (himg ▸ Finset.mem_univ i) with ⟨⟨j, u⟩, hmem, hjeq⟩
-      dsimp only at hjeq; subst hjeq; exact ⟨u, hmem⟩
-    exact ⟨fun i => (hex i).choose, fun i j hij =>
-      hS.isClique (hex i).choose_spec (hex j).choose_spec fun h => hij.ne (Sigma.mk.inj h).1⟩
-
-/-- For `1 ≤ s`, `G` has no clique of size `s` iff `G.toSimpleGraph.cliqueNum < s`. -/
-theorem not_hasCliqueOfCard_iff_cliqueNum_lt (G : MulticoloredCliqueInstance) {s : ℕ}
-    (hs : 1 ≤ s) : ¬ G.HasCliqueOfCard s ↔ G.toSimpleGraph.cliqueNum < s := by
-  rw [Nat.lt_iff_le_pred hs]
-  refine ⟨fun hno => ?_, fun hle ⟨T, hT⟩ => ?_⟩
-  · rcases G.toSimpleGraph.exists_isNClique_cliqueNum with ⟨T, hT⟩
-    by_contra! hgt
-    exact hno (G.hasCliqueOfCard_mono ⟨T, hT⟩ (by omega))
-  · have := hT.isClique.card_le_cliqueNum
-    have := hT.card_eq
-    omega
-
-/-- Polynomial-time conversion from `MulticoloredCliqueInstance` to `FinTwoCSP` preserving
-`numColors` identically. -/
-@[expose]
-def toFinTwoCSP (G : MulticoloredCliqueInstance) : FinTwoCSP :=
-  let k := G.numColors
-  let edgeRel (i j : ℕ) : List (ℕ × ℕ) :=
-    (List.range (G.partSizes.getD i 0)).flatMap fun u =>
-      ((List.range (G.partSizes.getD j 0)).filter fun v =>
-        G.edges.any fun e =>
-          (e.1.1 == i && e.1.2 == u && e.2.1 == j && e.2.2 == v) ||
-            (e.1.1 == j && e.1.2 == v && e.2.1 == i && e.2.2 == u)).map fun v => (u, v)
-  let constraints : List FinTwoCSPConstraint :=
-    (List.range k).flatMap fun i =>
-      ((List.range k).filter fun j => decide (i < j)).map fun j => ⟨i, j, edgeRel i j⟩
-  ⟨G.partSizes, constraints⟩
-
-theorem toFinTwoCSP_numVars (G : MulticoloredCliqueInstance) :
-    G.toFinTwoCSP.numVars = G.numColors := rfl
-
-theorem toFinTwoCSP_isSatisfiable_iff (G : MulticoloredCliqueInstance) :
-    G.toFinTwoCSP.IsSatisfiable ↔ G.HasMulticoloredClique := by
-  have hmem : ∀ (i j : Fin G.numColors) (u : Fin G.partSizes[i.1]) (v : Fin G.partSizes[j.1]),
-      i < j →
-      (((u.1, v.1) ∈ (List.range (G.partSizes.getD i.1 0)).flatMap fun u' =>
-        ((List.range (G.partSizes.getD j.1 0)).filter fun v' =>
-          G.edges.any fun e =>
-            (e.1.1 == i.1 && e.1.2 == u' && e.2.1 == j.1 && e.2.2 == v') ||
-              (e.1.1 == j.1 && e.1.2 == v' && e.2.1 == i.1 && e.2.2 == u')).map
-          fun v' => (u', v'))
-        ↔ G.toSimpleGraph.Adj ⟨i, u⟩ ⟨j, v⟩) := by
-    intro i j u v hij
-    simp only [List.mem_flatMap, List.mem_map, List.mem_filter, List.mem_range, List.any_eq_true,
-      Bool.or_eq_true, Bool.and_eq_true, beq_iff_eq, Prod.mk.injEq, toSimpleGraph]
-    constructor
-    · rintro ⟨u', -, v', ⟨-, ⟨e, he, h⟩⟩, rfl, rfl⟩
-      refine ⟨hij.ne, ?_⟩
-      rcases h with ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ | ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩
-      · left; exact (show e = ((i.1, u.1), (j.1, v.1)) from by
-          rcases e with ⟨⟨a, b⟩, ⟨c, d⟩⟩; simp_all) ▸ he
-      · right; exact (show e = ((j.1, v.1), (i.1, u.1)) from by
-          rcases e with ⟨⟨a, b⟩, ⟨c, d⟩⟩; simp_all) ▸ he
-    · rintro ⟨-, h⟩
-      refine ⟨u.1, by rw [List.getD_eq_getElem _ _ i.2]; exact u.2,
-        v.1, ⟨by rw [List.getD_eq_getElem _ _ j.2]; exact v.2, ?_⟩, rfl, rfl⟩
-      rcases h with h | h
-      · exact ⟨_, h, Or.inl ⟨⟨⟨rfl, rfl⟩, rfl⟩, rfl⟩⟩
-      · exact ⟨_, h, Or.inr ⟨⟨⟨rfl, rfl⟩, rfl⟩, rfl⟩⟩
-  constructor
-  · rintro ⟨σ, hσ⟩
-    have hsat := FinTwoCSP.satisfies_toTwoCSP_iff.mp hσ
-    refine ⟨σ, fun i j hij => ?_⟩
-    have hc : ⟨i.1, j.1,
-        (List.range (G.partSizes.getD i.1 0)).flatMap fun u' =>
-          ((List.range (G.partSizes.getD j.1 0)).filter fun v' =>
-            G.edges.any fun e =>
-              (e.1.1 == i.1 && e.1.2 == u' && e.2.1 == j.1 && e.2.2 == v') ||
-                (e.1.1 == j.1 && e.1.2 == v' && e.2.1 == i.1 && e.2.2 == u')).map
-            fun v' => (u', v')⟩ ∈ G.toFinTwoCSP.constraints := by
-      simp only [toFinTwoCSP, List.mem_flatMap, List.mem_map, List.mem_filter, List.mem_range,
-        decide_eq_true_eq]
-      exact ⟨i.1, i.2, j.1, ⟨j.2, hij⟩, rfl⟩
-    exact (hmem i j (σ i) (σ j) hij).mp (hsat _ hc i.2 j.2)
-  · rintro ⟨c, hc⟩
-    refine ⟨c, FinTwoCSP.satisfies_toTwoCSP_iff.mpr fun con hcon h1 h2 => ?_⟩
-    simp only [toFinTwoCSP, List.mem_flatMap, List.mem_map, List.mem_filter, List.mem_range,
-      decide_eq_true_eq] at hcon
-    rcases hcon with ⟨i, hi, j, ⟨hj, hij⟩, rfl⟩
-    exact (hmem ⟨i, hi⟩ ⟨j, hj⟩ (c ⟨i, hi⟩) (c ⟨j, hj⟩) hij).mpr (hc ⟨i, hi⟩ ⟨j, hj⟩ hij)
-
-/-- `MulticoloredCliqueInstance.toFinTwoCSP` is computable in polynomial time. -/
-theorem computableInPolyTime_toFinTwoCSP :
-    ComputableInPolyTime toFinTwoCSP encMulticoloredClique encFinTwoCSP := by
-  unfold toFinTwoCSP numColors
-  dsimp only
-  fun_prop
-
-/-- Polynomial-time conversion from `FinTwoCSP` to `MulticoloredCliqueInstance`, preserving
-`numVars` identically. -/
-@[expose]
-def ofFinTwoCSP (I : FinTwoCSP) : MulticoloredCliqueInstance :=
-  let k := I.numVars
-  let selfOk (x a : ℕ) : Bool :=
-    I.constraints.all fun c =>
-      !(c.fst == x && c.snd == x) || c.rel.any fun p => p.1 == a && p.2 == a
-  let pairOk (x a y b : ℕ) : Bool :=
-    I.constraints.all fun c =>
-      (!(c.fst == x && c.snd == y) || c.rel.any fun p => p.1 == a && p.2 == b) &&
-        (!(c.fst == y && c.snd == x) || c.rel.any fun p => p.1 == b && p.2 == a)
-  if k == 1 then
-    if (List.range (I.domSizes.getD 0 0)).any (selfOk 0) then ⟨[1], []⟩ else ⟨[0], []⟩
-  else
-    let partSizes := (List.range k).map fun x => I.domSizes.getD x 0
-    let edges := (List.range k).flatMap fun x =>
-      ((List.range k).filter fun y => decide (x < y)).flatMap fun y =>
-        ((List.range (I.domSizes.getD x 0)).filter fun a => selfOk x a).flatMap fun a =>
-          ((List.range (I.domSizes.getD y 0)).filter fun b => selfOk y b && pairOk x a y b).map
-            fun b => ((x, a), (y, b))
-    ⟨partSizes, edges⟩
-
-theorem ofFinTwoCSP_numColors (I : FinTwoCSP) : (ofFinTwoCSP I).numColors = I.numVars := by
-  unfold ofFinTwoCSP numColors
-  dsimp only
-  split_ifs with h1 h2
-  · simp [beq_iff_eq.mp h1]
-  · simp [beq_iff_eq.mp h1]
-  · simp
-
-theorem ofFinTwoCSP_hasMulticoloredClique_iff (I : FinTwoCSP) :
-    (ofFinTwoCSP I).HasMulticoloredClique ↔ I.IsSatisfiable := by
-  by_cases hk1 : I.numVars = 1
-  · unfold ofFinTwoCSP
-    have hk1' : I.domSizes.length = 1 := hk1
-    simp only [hk1, beq_self_eq_true, ↓reduceIte]
-    have hdom0 : I.domSizes.getD 0 0 = I.domSizes[0]'(by omega) :=
-      List.getD_eq_getElem _ _ (by omega)
-    have hself : ((List.range (I.domSizes.getD 0 0)).any fun a =>
-        I.constraints.all fun c => !(c.fst == 0 && c.snd == 0) ||
-          c.rel.any fun p => p.1 == a && p.2 == a) = true ↔ I.IsSatisfiable := by
-      simp only [List.any_eq_true, List.mem_range, List.all_eq_true, Bool.or_eq_true,
-        Bool.not_eq_true', Bool.and_eq_false_iff, Bool.and_eq_true, beq_eq_false_iff_ne,
-        beq_iff_eq, hdom0]
+  · rintro ⟨f, hfV, hadj⟩
+    have hinj : Function.Injective f := by
+      intro i j hij
+      apply Fin.ext
+      rw [← (hfV i).2, ← (hfV j).2, hij]
+    refine ⟨Finset.univ.image f, ?_, ⟨?_, ?_⟩, ?_⟩
+    · intro v hv
+      obtain ⟨i, _, rfl⟩ := Finset.mem_image.1 hv
+      exact (hfV i).1
+    · intro u hu v hv huv
+      obtain ⟨i, _, rfl⟩ := Finset.mem_image.1 hu
+      obtain ⟨j, _, rfl⟩ := Finset.mem_image.1 hv
+      exact hadj i j fun h => huv (h ▸ rfl)
+    · rw [Finset.card_image_of_injective _ hinj, Finset.card_univ, Fintype.card_fin]
+    · ext c
+      simp only [Finset.mem_image, Finset.mem_univ, true_and, Finset.mem_range]
       constructor
-      · rintro ⟨a, ha, hall⟩
-        refine ⟨fun x => ⟨a, by
-            have hx : x = ⟨0, by omega⟩ := Fin.ext (by have := x.2; omega)
-            rw [hx]; exact ha⟩,
-          FinTwoCSP.satisfies_toTwoCSP_iff.mpr fun c hc h1 h2 => ?_⟩
-        have h10 : c.fst = 0 := by omega
-        have h20 : c.snd = 0 := by omega
-        rcases hall c hc with hne | ⟨⟨p1, p2⟩, hmem, hp1, hp2⟩
-        · rcases hne with hne | hne <;> [exact absurd h10 hne; exact absurd h20 hne]
-        · dsimp only at hp1 hp2; subst hp1; subst hp2; exact hmem
-      · rintro ⟨σ, hσ⟩
-        have hsat := FinTwoCSP.satisfies_toTwoCSP_iff.mp hσ
-        refine ⟨(σ ⟨0, by omega⟩).1, (σ ⟨0, by omega⟩).2, fun c hc => ?_⟩
-        by_cases h1 : c.fst = 0
-        · by_cases h2 : c.snd = 0
-          · right
-            refine ⟨((σ ⟨0, by omega⟩).1, (σ ⟨0, by omega⟩).1), ?_, rfl, rfl⟩
-            have h := hsat c hc (by omega) (by omega)
-            rwa [show (⟨c.fst, _⟩ : Fin I.numVars) = ⟨0, by omega⟩ from Fin.ext h1,
-              show (⟨c.snd, _⟩ : Fin I.numVars) = ⟨0, by omega⟩ from Fin.ext h2] at h
-          · exact Or.inl (Or.inr h2)
-        · exact Or.inl (Or.inl h1)
-    split_ifs with h
-    · refine iff_of_true ?_ (hself.mp h)
-      exact ⟨fun _ => ⟨0, by simp⟩, fun i j hij => by
-        exfalso; have hi := i.2; have hj := j.2; simp [numColors] at hi hj; omega⟩
-    · refine iff_of_false ?_ (mt hself.mpr h)
-      rintro ⟨c, -⟩
-      exact Fin.elim0 (c ⟨0, by decide⟩)
-  · have hbeq : (I.numVars == 1) = false := beq_false_of_ne hk1
-    have hnum : (ofFinTwoCSP I).numColors = I.numVars := ofFinTwoCSP_numColors I
-    have hpart_eq : (ofFinTwoCSP I).partSizes =
-        (List.range I.numVars).map fun x => I.domSizes.getD x 0 := by
-      unfold ofFinTwoCSP; dsimp only; rw [hbeq]; rfl
-    have hpart : ∀ x : Fin (ofFinTwoCSP I).numColors,
-        (ofFinTwoCSP I).partSizes[x.1] =
-          I.domSizes[x.1]'(by simpa [hnum] using x.2) := by
-      intro x
-      have hx : x.1 < I.numVars := by simpa [hnum] using x.2
-      simp only [hpart_eq, List.getElem_map, List.getElem_range]
-      exact List.getD_eq_getElem _ _ hx
-    have hedge : ∀ (x y : Fin I.numVars) (a : Fin I.domSizes[x.1]) (b : Fin I.domSizes[y.1]),
-        x < y →
-        ((((x.1, a.1), (y.1, b.1)) ∈ (ofFinTwoCSP I).edges ∨
-          ((y.1, b.1), (x.1, a.1)) ∈ (ofFinTwoCSP I).edges) ↔
-        (∀ c ∈ I.constraints, c.fst = x.1 → c.snd = x.1 → (a.1, a.1) ∈ c.rel) ∧
-        (∀ c ∈ I.constraints, c.fst = y.1 → c.snd = y.1 → (b.1, b.1) ∈ c.rel) ∧
-        (∀ c ∈ I.constraints, c.fst = x.1 → c.snd = y.1 → (a.1, b.1) ∈ c.rel) ∧
-        (∀ c ∈ I.constraints, c.fst = y.1 → c.snd = x.1 → (b.1, a.1) ∈ c.rel)) := by
-      intro x y a b hxy
-      have hmem_one : ∀ (u v : Fin I.numVars) (p : Fin I.domSizes[u.1]) (q : Fin I.domSizes[v.1]),
-          (((u.1, p.1), (v.1, q.1)) ∈ (ofFinTwoCSP I).edges ↔
-            u < v ∧
-            (∀ c ∈ I.constraints, c.fst = u.1 → c.snd = u.1 → (p.1, p.1) ∈ c.rel) ∧
-            (∀ c ∈ I.constraints, c.fst = v.1 → c.snd = v.1 → (q.1, q.1) ∈ c.rel) ∧
-            (∀ c ∈ I.constraints, c.fst = u.1 → c.snd = v.1 → (p.1, q.1) ∈ c.rel) ∧
-            (∀ c ∈ I.constraints, c.fst = v.1 → c.snd = u.1 → (q.1, p.1) ∈ c.rel)) := by
-        intro u v p q
-        simp only [ofFinTwoCSP, hbeq, Bool.false_eq_true, ↓reduceIte, List.mem_flatMap,
-          List.mem_map, List.mem_filter, List.mem_range, List.all_eq_true, List.any_eq_true,
-          Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true', Bool.and_eq_false_iff,
-          beq_eq_false_iff_ne, decide_eq_true_eq, beq_iff_eq, Prod.mk.injEq]
-        constructor
-        · rintro ⟨x', hx', y', ⟨hy', hlt⟩, a', ⟨ha', hself1⟩, b', ⟨hb', hself2, hpair⟩,
-            ⟨rfl, rfl⟩, ⟨rfl, rfl⟩⟩
-          refine ⟨hlt, fun c hc h1 h2 => ?_, fun c hc h1 h2 => ?_, fun c hc h1 h2 => ?_,
-            fun c hc h1 h2 => ?_⟩
-          · rcases hself1 c hc with hne | ⟨⟨p1, p2⟩, hm, hp1, hp2⟩
-            · rcases hne with h | h <;> [exact absurd h1 h; exact absurd h2 h]
-            · dsimp only at hp1 hp2; subst hp1; subst hp2; exact hm
-          · rcases hself2 c hc with hne | ⟨⟨p1, p2⟩, hm, hp1, hp2⟩
-            · rcases hne with h | h <;> [exact absurd h1 h; exact absurd h2 h]
-            · dsimp only at hp1 hp2; subst hp1; subst hp2; exact hm
-          · rcases (hpair c hc).1 with hne | ⟨⟨p1, p2⟩, hm, hp1, hp2⟩
-            · rcases hne with h | h <;> [exact absurd h1 h; exact absurd h2 h]
-            · dsimp only at hp1 hp2; subst hp1; subst hp2; exact hm
-          · rcases (hpair c hc).2 with hne | ⟨⟨p1, p2⟩, hm, hp1, hp2⟩
-            · rcases hne with h | h <;> [exact absurd h1 h; exact absurd h2 h]
-            · dsimp only at hp1 hp2; subst hp1; subst hp2; exact hm
-        · rintro ⟨hlt, hs1, hs2, hp1, hp2⟩
-          refine ⟨u.1, u.2, v.1, ⟨v.2, hlt⟩,
-            p.1, ⟨by rw [List.getD_eq_getElem _ _ u.2]; exact p.2, fun c hc => ?_⟩,
-            q.1, ⟨by rw [List.getD_eq_getElem _ _ v.2]; exact q.2, fun c hc => ?_, fun c hc => ?_⟩,
-            ⟨rfl, rfl⟩, ⟨rfl, rfl⟩⟩
-          · by_cases h1 : c.fst = u.1
-            · by_cases h2 : c.snd = u.1
-              · exact Or.inr ⟨(p.1, p.1), hs1 c hc h1 h2, rfl, rfl⟩
-              · exact Or.inl (Or.inr h2)
-            · exact Or.inl (Or.inl h1)
-          · by_cases h1 : c.fst = v.1
-            · by_cases h2 : c.snd = v.1
-              · exact Or.inr ⟨(q.1, q.1), hs2 c hc h1 h2, rfl, rfl⟩
-              · exact Or.inl (Or.inr h2)
-            · exact Or.inl (Or.inl h1)
-          · refine ⟨?_, ?_⟩
-            · by_cases h1 : c.fst = u.1
-              · by_cases h2 : c.snd = v.1
-                · exact Or.inr ⟨(p.1, q.1), hp1 c hc h1 h2, rfl, rfl⟩
-                · exact Or.inl (Or.inr h2)
-              · exact Or.inl (Or.inl h1)
-            · by_cases h1 : c.fst = v.1
-              · by_cases h2 : c.snd = u.1
-                · exact Or.inr ⟨(q.1, p.1), hp2 c hc h1 h2, rfl, rfl⟩
-                · exact Or.inl (Or.inr h2)
-              · exact Or.inl (Or.inl h1)
-      rw [hmem_one x y a b, hmem_one y x b a]
-      exact ⟨fun h => h.elim (fun h => h.2) (fun h => absurd h.1 hxy.asymm),
-        fun h => Or.inl ⟨hxy, h⟩⟩
-    constructor
-    · rintro ⟨c, hc⟩
-      let σ : ∀ x : Fin I.numVars, Fin I.domSizes[x.1] := fun x =>
-        let i : Fin (ofFinTwoCSP I).numColors := ⟨x.1, hnum.symm ▸ x.2⟩
-        ⟨(c i).1, by rw [← hpart i]; exact (c i).2⟩
-      refine ⟨σ, FinTwoCSP.satisfies_toTwoCSP_iff.mpr fun con hcon h1 h2 => ?_⟩
-      by_cases h12 : con.fst = con.snd
-      · have hk2 : 2 ≤ I.numVars := by omega
-        have ⟨y, hy⟩ : ∃ y : Fin I.numVars, y ≠ ⟨con.fst, h1⟩ := by
-          by_cases h0 : (⟨con.fst, h1⟩ : Fin I.numVars) = ⟨0, by omega⟩
-          · exact ⟨⟨1, by omega⟩, fun h => by have := congrArg Fin.val (h.trans h0); simp at this⟩
-          · exact ⟨⟨0, by omega⟩, Ne.symm h0⟩
-        have hfst_eq : (⟨con.fst, h1⟩ : Fin I.numVars) = ⟨con.snd, h2⟩ := Fin.ext h12
-        rcases lt_or_gt_of_ne hy with hlt | hgt
-        · have hadj := hc ⟨y.1, hnum.symm ▸ y.2⟩ ⟨con.fst, hnum.symm ▸ h1⟩ hlt
-          have h := (hedge y ⟨con.fst, h1⟩ (σ y) (σ ⟨con.fst, h1⟩) hlt).mp hadj.2
-          rw [← hfst_eq]
-          exact h.2.1 con hcon rfl h12.symm
-        · have hadj := hc ⟨con.fst, hnum.symm ▸ h1⟩ ⟨y.1, hnum.symm ▸ y.2⟩ hgt
-          have h := (hedge ⟨con.fst, h1⟩ y (σ ⟨con.fst, h1⟩) (σ y) hgt).mp hadj.2
-          rw [← hfst_eq]
-          exact h.1 con hcon rfl h12.symm
-      · rcases lt_or_gt_of_ne h12 with hlt | hgt
-        · have hlt' : (⟨con.fst, h1⟩ : Fin I.numVars) < ⟨con.snd, h2⟩ := hlt
-          have hadj := hc ⟨con.fst, hnum.symm ▸ h1⟩ ⟨con.snd, hnum.symm ▸ h2⟩ hlt'
-          exact ((hedge ⟨con.fst, h1⟩ ⟨con.snd, h2⟩ (σ ⟨con.fst, h1⟩) (σ ⟨con.snd, h2⟩) hlt').mp
-            hadj.2).2.2.1 con hcon rfl rfl
-        · have hgt' : (⟨con.snd, h2⟩ : Fin I.numVars) < ⟨con.fst, h1⟩ := hgt
-          have hadj := hc ⟨con.snd, hnum.symm ▸ h2⟩ ⟨con.fst, hnum.symm ▸ h1⟩ hgt'
-          exact ((hedge ⟨con.snd, h2⟩ ⟨con.fst, h1⟩ (σ ⟨con.snd, h2⟩) (σ ⟨con.fst, h1⟩) hgt').mp
-            hadj.2).2.2.2 con hcon rfl rfl
-    · rintro ⟨σ, hσ⟩
-      have hsat := FinTwoCSP.satisfies_toTwoCSP_iff.mp hσ
-      let c : ∀ i : Fin (ofFinTwoCSP I).numColors, Fin (ofFinTwoCSP I).partSizes[i.1] := fun i =>
-        ⟨(σ ⟨i.1, hnum ▸ i.2⟩).1, by rw [hpart i]; exact (σ ⟨i.1, hnum ▸ i.2⟩).2⟩
-      refine ⟨c, fun i j hij => ⟨hij.ne, ?_⟩⟩
-      have hi : i.1 < I.numVars := hnum ▸ i.2
-      have hj : j.1 < I.numVars := hnum ▸ j.2
-      exact (hedge ⟨i.1, hi⟩ ⟨j.1, hj⟩ (σ ⟨i.1, hi⟩) (σ ⟨j.1, hj⟩) hij).mpr
-        ⟨fun con hcon h1 h2 => by
-            have h := hsat con hcon (h1.symm ▸ hi) (h2.symm ▸ hi)
-            rwa [show (⟨con.fst, _⟩ : Fin I.numVars) = ⟨i.1, hi⟩ from Fin.ext h1,
-              show (⟨con.snd, _⟩ : Fin I.numVars) = ⟨i.1, hi⟩ from Fin.ext h2] at h,
-          fun con hcon h1 h2 => by
-            have h := hsat con hcon (h1.symm ▸ hj) (h2.symm ▸ hj)
-            rwa [show (⟨con.fst, _⟩ : Fin I.numVars) = ⟨j.1, hj⟩ from Fin.ext h1,
-              show (⟨con.snd, _⟩ : Fin I.numVars) = ⟨j.1, hj⟩ from Fin.ext h2] at h,
-          fun con hcon h1 h2 => by
-            have h := hsat con hcon (h1.symm ▸ hi) (h2.symm ▸ hj)
-            rwa [show (⟨con.fst, _⟩ : Fin I.numVars) = ⟨i.1, hi⟩ from Fin.ext h1,
-              show (⟨con.snd, _⟩ : Fin I.numVars) = ⟨j.1, hj⟩ from Fin.ext h2] at h,
-          fun con hcon h1 h2 => by
-            have h := hsat con hcon (h1.symm ▸ hj) (h2.symm ▸ hi)
-            rwa [show (⟨con.fst, _⟩ : Fin I.numVars) = ⟨j.1, hj⟩ from Fin.ext h1,
-              show (⟨con.snd, _⟩ : Fin I.numVars) = ⟨i.1, hi⟩ from Fin.ext h2] at h⟩
+      · rintro ⟨_, ⟨i, rfl⟩, rfl⟩
+        rw [(hfV i).2]
+        exact i.isLt
+      · intro hc
+        exact ⟨f ⟨c, hc⟩, ⟨⟨c, hc⟩, rfl⟩, (hfV ⟨c, hc⟩).2⟩
+  · rintro ⟨S, hSV, ⟨hclq, hcard⟩, himg⟩
+    have hex : ∀ i : Fin x.k, ∃ v ∈ S, colorOf x.graph x.colors v = i.1 := by
+      intro i
+      have hi : i.1 ∈ S.image (colorOf x.graph x.colors) := himg ▸ Finset.mem_range.2 i.isLt
+      exact Finset.mem_image.1 hi
+    choose f hfS hfc using hex
+    refine ⟨f, fun i => ⟨hSV (f i) (hfS i), hfc i⟩, fun i j hij => ?_⟩
+    have hne : f i ≠ f j := by
+      intro heq
+      apply hij
+      apply Fin.ext
+      rw [← hfc i, ← hfc j, heq]
+    exact hclq (hfS i) (hfS j) hne
 
-/-- `MulticoloredCliqueInstance.ofFinTwoCSP` is computable in polynomial time. -/
-theorem computableInPolyTime_ofFinTwoCSP :
-    ComputableInPolyTime ofFinTwoCSP encFinTwoCSP encMulticoloredClique := by
-  unfold ofFinTwoCSP
+/-! ### 2. Reduction from `Clique` to `MulticoloredClique` (`W[1]`-Hardness) -/
+
+private def mcEntries (G : Graph) (k : ℕ) : List (ℕ × ℕ) :=
+  if decide (k ≤ G.vertices.length) then
+    (List.range (G.vertices.take k).length).flatMap fun i => G.vertices.map (i, ·)
+  else []
+
+private def mcAdj (G : Graph) (p q : ℕ × ℕ) : Bool :=
+  decide (p.1 ≠ q.1) && G.adjBool p.2 q.2
+
+/-- Polynomial-time, parameter-preserving reduction from `Clique` to `MulticoloredClique`. -/
+def cliqueToMulticoloredClique (x : CliqueInstance) : MulticoloredCliqueInstance :=
+  let vs := mcEntries x.graph x.m
+  ⟨Graph.ofAdj vs (mcAdj x.graph), vs.map Prod.fst, x.m⟩
+
+private lemma colorOf_ofAdj_fst {V : Type} (vs : List V) (adj : V → V → Bool) (f : V → ℕ)
+    {idx : ℕ} (hidx : idx < vs.length) :
+    colorOf (Graph.ofAdj vs adj) (vs.map f) idx = f vs[idx] := by
+  have hlt_i := List.idxOf_lt_length_of_mem (List.mem_range.2 hidx)
+  have hidxOf : (List.range vs.length).idxOf idx = idx := by
+    have h1 := List.getElem_idxOf hlt_i
+    rwa [List.getElem_range] at h1
+  simp [colorOf, Graph.ofAdj, hidxOf, List.getD_eq_getElem?_getD, hidx]
+
+/-- Correctness of `cliqueToMulticoloredClique`. -/
+theorem cliqueToMulticoloredClique_mem_iff (x : CliqueInstance) :
+    cliqueToMulticoloredClique x ∈ MulticoloredClique ↔ x ∈ Clique := by
+  classical
+  obtain ⟨G, k⟩ := x
+  unfold cliqueToMulticoloredClique
   dsimp only
-  fun_prop
+  by_cases hk : k ≤ G.vertices.length
+  · have htake : (G.vertices.take k).length = k := List.length_take_of_le hk
+    have hvs : mcEntries G k = (List.range k).flatMap fun i => G.vertices.map (i, ·) := by
+      simp [mcEntries, hk, htake]
+    constructor
+    · rintro ⟨f, hfV, hadj⟩
+      have hlt (i : Fin k) : f i < (mcEntries G k).length := by
+        have hv := (hfV i).1
+        simpa [Graph.ofAdj] using hv
+      let g (i : Fin k) : ℕ := ((mcEntries G k)[f i]'(hlt i)).2
+      have hg_col (i : Fin k) : ((mcEntries G k)[f i]'(hlt i)).1 = i.1 := by
+        have hc := (hfV i).2
+        rwa [colorOf_ofAdj_fst _ _ Prod.fst (hlt i)] at hc
+      have hg_mem (i : Fin k) : g i ∈ G.vertices := by
+        have hmem : (mcEntries G k)[f i]'(hlt i) ∈
+            (List.range k).flatMap (fun j => G.vertices.map (j, ·)) :=
+          hvs ▸ List.getElem_mem _
+        rw [List.mem_flatMap] at hmem
+        obtain ⟨_, _, hm⟩ := hmem
+        obtain ⟨v, hv, heq⟩ := List.mem_map.1 hm
+        simpa [g, ← heq] using hv
+      have hg_adj : ∀ i j : Fin k, i ≠ j → G.toSimpleGraph.Adj (g i) (g j) := by
+        intro i j hij
+        have ha := hadj i j hij
+        obtain ⟨_, hi', hj', hor⟩ := Graph.ofAdj_adj.1 ha
+        simp only [mcAdj, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq,
+          Graph.adjBool_eq_true_iff] at hor
+        rcases hor with ⟨_, h⟩ | ⟨_, h⟩
+        · exact h
+        · exact h.symm
+      have hg_inj : Function.Injective g := by
+        intro i j hij
+        by_contra hne
+        exact (hg_adj i j hne).ne hij
+      rw [mem_Clique_iff]
+      refine ⟨Finset.univ.image g, ?_, ?_, ?_⟩
+      · intro v hv
+        obtain ⟨i, _, rfl⟩ := Finset.mem_image.1 hv
+        exact hg_mem i
+      · intro u hu v hv huv
+        obtain ⟨i, _, rfl⟩ := Finset.mem_image.1 hu
+        obtain ⟨j, _, rfl⟩ := Finset.mem_image.1 hv
+        exact hg_adj i j fun h => huv (h ▸ rfl)
+      · rw [Finset.card_image_of_injective _ hg_inj, Finset.card_univ, Fintype.card_fin]
+    · rw [mem_Clique_iff]
+      rintro ⟨S, hSV, hclq, hcard⟩
+      let e := S.equivFinOfCardEq hcard
+      let w (i : Fin k) : ℕ := (e.symm i).1
+      have hwS (i : Fin k) : w i ∈ S := (e.symm i).2
+      have hwV (i : Fin k) : w i ∈ G.vertices := hSV (w i) (hwS i)
+      have hpair_mem (i : Fin k) : (i.1, w i) ∈ mcEntries G k := by
+        rw [hvs, List.mem_flatMap]
+        exact ⟨i.1, List.mem_range.2 i.isLt, List.mem_map.2 ⟨w i, hwV i, rfl⟩⟩
+      let idx (i : Fin k) : ℕ := (mcEntries G k).idxOf (i.1, w i)
+      have hidx_lt (i : Fin k) : idx i < (mcEntries G k).length :=
+        List.idxOf_lt_length_of_mem (hpair_mem i)
+      have hidx_get (i : Fin k) : (mcEntries G k)[idx i]'(hidx_lt i) = (i.1, w i) :=
+        List.getElem_idxOf (hidx_lt i)
+      refine ⟨idx, fun i => ⟨by simpa [Graph.ofAdj] using hidx_lt i, ?_⟩, fun i j hij => ?_⟩
+      · rw [colorOf_ofAdj_fst _ _ Prod.fst (hidx_lt i), hidx_get i]
+      · have hne_w : w i ≠ w j := by
+          intro heq
+          apply hij
+          exact e.symm.injective (Subtype.ext heq)
+        have hne_idx : idx i ≠ idx j := by
+          intro heq
+          have h1 := hidx_get i
+          have h2 := hidx_get j
+          have hpair : (i.1, w i) = (j.1, w j) := by
+            rw [← h1, ← h2]
+            exact congrArg (fun t : Fin (mcEntries G k).length => (mcEntries G k)[t])
+              (Fin.ext heq : (⟨idx i, hidx_lt i⟩ : Fin (mcEntries G k).length) =
+                ⟨idx j, hidx_lt j⟩)
+          exact hij (Fin.ext (Prod.mk.inj hpair).1)
+        refine Graph.ofAdj_adj.2 ⟨hne_idx, hidx_lt i, hidx_lt j, Bool.or_eq_true_iff.2 (Or.inl ?_)⟩
+        rw [hidx_get i, hidx_get j]
+        simp only [mcAdj, Bool.and_eq_true, decide_eq_true_eq, Graph.adjBool_eq_true_iff]
+        exact ⟨fun h => hij (Fin.ext h), hclq (hwS i) (hwS j) hne_w⟩
+  · have hvs : mcEntries G k = [] := by simp [mcEntries, hk]
+    have hk_pos : 0 < k := by omega
+    constructor
+    · rintro ⟨f, hfV, _⟩
+      have h0 := (hfV ⟨0, hk_pos⟩).1
+      simp [hvs, Graph.ofAdj] at h0
+    · rw [mem_Clique_iff]
+      rintro ⟨S, hSV, _, hcard⟩
+      dsimp only at hcard
+      have hle : S.card ≤ G.vertices.length :=
+        (Finset.card_le_card fun v hv => List.mem_toFinset.2 (hSV v hv)).trans
+          G.vertices.toFinset_card_le
+      omega
 
-end MulticoloredCliqueInstance
+/-- Polynomial-time certificate for `cliqueToMulticoloredClique`. -/
+@[fun_prop]
+theorem computableInPolyTime_cliqueToMulticoloredClique :
+    ComputableInPolyTime cliqueToMulticoloredClique encCliqueInstance encMulticoloredClique := by
+  have hcond : ComputableInPolyTime
+      (fun x : CliqueInstance => decide (x.m ≤ x.graph.vertices.length))
+      encCliqueInstance encBool :=
+    binary_le' (by fun_prop) (unary_to_binary.comp (by fun_prop))
+  have htakeLen : ComputableInPolyTime
+      (fun x : CliqueInstance => (x.graph.vertices.take x.m).length)
+      encCliqueInstance encUnary := by
+    have hmin : ComputableInPolyTime
+        (fun x : CliqueInstance => min x.graph.vertices.length x.m)
+        encCliqueInstance encUnary :=
+      binary_min_unary' (by fun_prop) (by fun_prop)
+    simpa only [List.length_take, Nat.min_comm] using hmin
+  have hrange : ComputableInPolyTime
+      (fun x : CliqueInstance => List.range (x.graph.vertices.take x.m).length)
+      encCliqueInstance (encList encNat) := by
+    have hr : ComputableInPolyTime
+        (fun x : CliqueInstance => List.range (x.graph.vertices.take x.m).length)
+        encCliqueInstance (encList encUnary) := range.comp htakeLen
+    have hc : ComputableInPolyTime (List.map (fun n : ℕ => n))
+        (encList encUnary) (encList encNat) := map unary_to_binary
+    simpa only [Function.comp_def, List.map_id_fun', id_eq] using hc.comp hr
+  have hvs : ComputableInPolyTime
+      (fun x : CliqueInstance => mcEntries x.graph x.m)
+      encCliqueInstance (encList (encPair encNat encNat)) := by
+    unfold mcEntries
+    refine hcond.ite ?_ (const [])
+    refine flatMapWithInput hrange ?_
+    exact mapWithInput (by fun_prop) (by fun_prop)
+  have hadj : ComputableInPolyTime
+      (fun p : CliqueInstance × ((ℕ × ℕ) × (ℕ × ℕ)) => mcAdj p.1.graph p.2.1 p.2.2)
+      (encPair encCliqueInstance (encPair (encPair encNat encNat) (encPair encNat encNat)))
+      encBool := by
+    unfold mcAdj
+    fun_prop
+  have hG := Graph.computableInPolyTime_ofAdj (adj := fun x p q => mcAdj x.graph p q) hvs hadj
+  unfold cliqueToMulticoloredClique
+  exact encMulticoloredClique_mk_polyTime hG (by fun_prop) (by fun_prop)
 
-/-- `MulticoloredCliqueInstance.Language` fpt-reduces to `FinTwoCSP.SatisfiableSet`. -/
-theorem fptReducible_multicoloredClique_finTwoCSP :
-    FPTReducible encMulticoloredClique encFinTwoCSP
-      MulticoloredCliqueInstance.numColors FinTwoCSP.numVars
-      MulticoloredCliqueInstance.Language FinTwoCSP.SatisfiableSet :=
-  FPTReducible.of_computableInPolyTime MulticoloredCliqueInstance.computableInPolyTime_toFinTwoCSP
-    (h := id) (fun _ => le_rfl) fun G =>
-      (MulticoloredCliqueInstance.toFinTwoCSP_isSatisfiable_iff G).symm
+/-- `Clique` reduces to `MulticoloredClique` in polynomial time. -/
+theorem polyTimeReducible_clique_multicoloredClique :
+    PolyTimeReducible encCliqueInstance encMulticoloredClique Clique MulticoloredClique :=
+  ⟨cliqueToMulticoloredClique, computableInPolyTime_cliqueToMulticoloredClique,
+    fun x => (cliqueToMulticoloredClique_mem_iff x).symm⟩
 
-/-- `FinTwoCSP.SatisfiableSet` fpt-reduces to `MulticoloredCliqueInstance.Language`. -/
-theorem fptReducible_finTwoCSP_multicoloredClique :
-    FPTReducible encFinTwoCSP encMulticoloredClique
-      FinTwoCSP.numVars MulticoloredCliqueInstance.numColors
-      FinTwoCSP.SatisfiableSet MulticoloredCliqueInstance.Language :=
-  FPTReducible.of_computableInPolyTime MulticoloredCliqueInstance.computableInPolyTime_ofFinTwoCSP
-    (h := id) (fun I => (MulticoloredCliqueInstance.ofFinTwoCSP_numColors I).le) fun I =>
-      (MulticoloredCliqueInstance.ofFinTwoCSP_hasMulticoloredClique_iff I).symm
+/-- `Clique` FPT-reduces to `MulticoloredClique` preserving the parameter `k`. -/
+theorem fptReducible_clique_multicoloredClique :
+    FPTReducible encCliqueInstance encMulticoloredClique (·.m) (·.k) Clique MulticoloredClique :=
+  FPTReducible.of_computableInPolyTime computableInPolyTime_cliqueToMulticoloredClique
+    (h := id) (fun _ => by simp [cliqueToMulticoloredClique])
+    fun x => (cliqueToMulticoloredClique_mem_iff x).symm
 
-/-- **`MulticoloredCliqueInstance.Language` is `W[1]`-hard.** -/
-theorem multicoloredClique_wHard :
-    WHard 1 encMulticoloredClique MulticoloredCliqueInstance.numColors
-      MulticoloredCliqueInstance.Language :=
-  FinTwoCSP.finTwoCSP_wHard.trans fptReducible_finTwoCSP_multicoloredClique
+/-- **Multicolored Clique is `W[1]`-hard**. -/
+theorem multicoloredClique_wHard : WHard 1 encMulticoloredClique (·.k) MulticoloredClique :=
+  Clique_wHard.trans fptReducible_clique_multicoloredClique
 
-/-- **`W[1] = FPT` iff `MulticoloredCliqueInstance.Language ∈ FPT`.** -/
-theorem W_one_eq_FPT_iff_multicoloredClique :
-    (∀ ⦃α : Type⦄ (enc : α ↪ List Bool) (κ : α → ℕ), W 1 enc κ = FPT enc κ) ↔
-      MulticoloredCliqueInstance.Language ∈
-        FPT encMulticoloredClique MulticoloredCliqueInstance.numColors :=
-  FinTwoCSP.W_one_eq_FPT_iff_finTwoCSP.trans
-    ⟨fptReducible_multicoloredClique_finTwoCSP.mem_FPT,
-      fptReducible_finTwoCSP_multicoloredClique.mem_FPT⟩
+/-- **Multicolored Clique is `NP`-hard**. -/
+theorem multicoloredClique_npHard : NPHard encMulticoloredClique MulticoloredClique :=
+  Clique_npHard.trans polyTimeReducible_clique_multicoloredClique
+
+/-! ### 3. Reduction from `MulticoloredClique` to `Clique` (`∈ W[1]` and `∈ NP`) -/
+
+/-- Filter vertices of `x.graph` to colors `< x.k` and retain only edges between distinct color
+classes. -/
+@[expose] def multicoloredCliqueToClique (x : MulticoloredCliqueInstance) : CliqueInstance :=
+  ⟨⟨x.graph.vertices.filter fun v => decide (colorOf x.graph x.colors v < x.k),
+    x.graph.edges.filter fun e =>
+      decide (colorOf x.graph x.colors e.1 ≠ colorOf x.graph x.colors e.2)⟩,
+    x.k⟩
+
+/-- Correctness of `multicoloredCliqueToClique`. -/
+theorem multicoloredCliqueToClique_mem_iff (x : MulticoloredCliqueInstance) :
+    multicoloredCliqueToClique x ∈ Clique ↔ x ∈ MulticoloredClique := by
+  classical
+  rw [mem_multicoloredClique_iff_finset, multicoloredCliqueToClique, mem_Clique_iff]
+  dsimp only
+  set G' : Graph :=
+    ⟨x.graph.vertices.filter fun v => decide (colorOf x.graph x.colors v < x.k),
+      x.graph.edges.filter fun e =>
+        decide (colorOf x.graph x.colors e.1 ≠ colorOf x.graph x.colors e.2)⟩
+  have hadj_iff {u v : ℕ} :
+      G'.toSimpleGraph.Adj u v ↔
+        x.graph.toSimpleGraph.Adj u v ∧
+          colorOf x.graph x.colors u ≠ colorOf x.graph x.colors v := by
+    simp only [Graph.toSimpleGraph_adj, G', List.mem_filter, decide_eq_true_eq]
+    constructor
+    · rintro ⟨hne, ⟨he, hcne⟩ | ⟨he, hcne⟩⟩
+      · exact ⟨⟨hne, Or.inl he⟩, hcne⟩
+      · exact ⟨⟨hne, Or.inr he⟩, hcne.symm⟩
+    · rintro ⟨⟨hne, he | he⟩, hcne⟩
+      · exact ⟨hne, Or.inl ⟨he, hcne⟩⟩
+      · exact ⟨hne, Or.inr ⟨he, hcne.symm⟩⟩
+  constructor
+  · rintro ⟨S, hSV', hclq, hcard⟩
+    have hSV : ∀ v ∈ S, v ∈ x.graph.vertices := fun v hv =>
+      (List.mem_filter.1 (hSV' v hv)).1
+    have hScol : ∀ v ∈ S, colorOf x.graph x.colors v < x.k := fun v hv =>
+      decide_eq_true_iff.1 (List.mem_filter.1 (hSV' v hv)).2
+    have hinj : Set.InjOn (colorOf x.graph x.colors) ↑S := by
+      intro u hu v hv hce
+      by_contra hne
+      exact (hadj_iff.1 (hclq hu hv hne)).2 hce
+    refine ⟨S, hSV, ⟨fun u hu v hv huv => (hadj_iff.1 (hclq hu hv huv)).1, hcard⟩, ?_⟩
+    refine Finset.eq_of_subset_of_card_le ?_ ?_
+    · intro c hc
+      obtain ⟨v, hv, rfl⟩ := Finset.mem_image.1 hc
+      exact Finset.mem_range.2 (hScol v hv)
+    · rw [Finset.card_image_of_injOn hinj, hcard, Finset.card_range]
+  · rintro ⟨S, hSV, ⟨hclq, hcard⟩, himg⟩
+    have hScol : ∀ v ∈ S, colorOf x.graph x.colors v < x.k := by
+      intro v hv
+      have hc : colorOf x.graph x.colors v ∈ Finset.range x.k :=
+        himg ▸ Finset.mem_image_of_mem _ hv
+      exact Finset.mem_range.1 hc
+    have hSV' : ∀ v ∈ S, v ∈ G'.vertices := fun v hv =>
+      List.mem_filter.2 ⟨hSV v hv, decide_eq_true (hScol v hv)⟩
+    have hinj : Set.InjOn (colorOf x.graph x.colors) ↑S := by
+      have hcard_img : (S.image (colorOf x.graph x.colors)).card = S.card := by
+        rw [himg, Finset.card_range, hcard]
+      exact Finset.injOn_of_card_image_eq hcard_img
+    refine ⟨S, hSV', ?_, hcard⟩
+    intro u hu v hv huv
+    exact hadj_iff.2 ⟨hclq hu hv huv, fun hce => huv (hinj hu hv hce)⟩
+
+/-- Polynomial-time certificate for `multicoloredCliqueToClique`. -/
+@[fun_prop]
+theorem computableInPolyTime_multicoloredCliqueToClique :
+    ComputableInPolyTime multicoloredCliqueToClique encMulticoloredClique encCliqueInstance := by
+  have hv : ComputableInPolyTime
+      (fun x : MulticoloredCliqueInstance =>
+        x.graph.vertices.filter fun v => decide (colorOf x.graph x.colors v < x.k))
+      encMulticoloredClique (encList encNat) := by
+    refine filterWithInput (by fun_prop) ?_
+    let E1 := encPair encMulticoloredClique encNat
+    have hx1 : ComputableInPolyTime (fun p : MulticoloredCliqueInstance × ℕ => p.1)
+        E1 encMulticoloredClique := fst _ _
+    have hc := computableInPolyTime_colorOf_comp (enc := E1)
+      (G := fun p : MulticoloredCliqueInstance × ℕ => p.1.graph)
+      (cs := fun p : MulticoloredCliqueInstance × ℕ => p.1.colors)
+      (v := fun p : MulticoloredCliqueInstance × ℕ => p.2)
+      (encMulticoloredClique_graph_polyTime hx1)
+      (encMulticoloredClique_colors_polyTime hx1) (snd _ _)
+    exact binary_lt' hc (encMulticoloredClique_k_polyTime hx1)
+  have he : ComputableInPolyTime
+      (fun x : MulticoloredCliqueInstance =>
+        x.graph.edges.filter fun e =>
+          decide (colorOf x.graph x.colors e.1 ≠ colorOf x.graph x.colors e.2))
+      encMulticoloredClique (encList (encPair encNat encNat)) := by
+    refine filterWithInput (by fun_prop) ?_
+    let E2 := encPair encMulticoloredClique (encPair encNat encNat)
+    have hx2 : ComputableInPolyTime (fun p : MulticoloredCliqueInstance × (ℕ × ℕ) => p.1)
+        E2 encMulticoloredClique := fst _ _
+    have hc1 := computableInPolyTime_colorOf_comp (enc := E2)
+      (G := fun p : MulticoloredCliqueInstance × (ℕ × ℕ) => p.1.graph)
+      (cs := fun p : MulticoloredCliqueInstance × (ℕ × ℕ) => p.1.colors)
+      (v := fun p : MulticoloredCliqueInstance × (ℕ × ℕ) => p.2.1)
+      (encMulticoloredClique_graph_polyTime hx2)
+      (encMulticoloredClique_colors_polyTime hx2) ((fst _ _).comp (snd _ _))
+    have hc2 := computableInPolyTime_colorOf_comp (enc := E2)
+      (G := fun p : MulticoloredCliqueInstance × (ℕ × ℕ) => p.1.graph)
+      (cs := fun p : MulticoloredCliqueInstance × (ℕ × ℕ) => p.1.colors)
+      (v := fun p : MulticoloredCliqueInstance × (ℕ × ℕ) => p.2.2)
+      (encMulticoloredClique_graph_polyTime hx2)
+      (encMulticoloredClique_colors_polyTime hx2) ((snd _ _).comp (snd _ _))
+    exact decide_ne hc1 hc2
+  unfold multicoloredCliqueToClique
+  exact encCliqueInstance_mk_polyTime (encGraph_mk_polyTime hv he) (by fun_prop)
+
+/-- `MulticoloredClique` reduces to `Clique` in polynomial time. -/
+theorem polyTimeReducible_multicoloredClique_clique :
+    PolyTimeReducible encMulticoloredClique encCliqueInstance MulticoloredClique Clique :=
+  ⟨multicoloredCliqueToClique, computableInPolyTime_multicoloredCliqueToClique,
+    fun x => (multicoloredCliqueToClique_mem_iff x).symm⟩
+
+/-- `MulticoloredClique` FPT-reduces to `Clique` preserving the parameter `k`. -/
+theorem fptReducible_multicoloredClique_clique :
+    FPTReducible encMulticoloredClique encCliqueInstance (·.k) (·.m) MulticoloredClique Clique :=
+  FPTReducible.of_computableInPolyTime computableInPolyTime_multicoloredCliqueToClique
+    (h := id) (fun _ => by simp [multicoloredCliqueToClique])
+    fun x => (multicoloredCliqueToClique_mem_iff x).symm
+
+/-- **Multicolored Clique belongs to `W[1]`**. -/
+theorem multicoloredClique_mem_W : MulticoloredClique ∈ W 1 encMulticoloredClique (·.k) :=
+  fptReducible_multicoloredClique_clique.mem_W Clique_mem_W
+
+/-- **Multicolored Clique belongs to `NP`**. -/
+theorem multicoloredClique_mem_NP : MulticoloredClique ∈ NP encMulticoloredClique :=
+  polyTimeReducible_multicoloredClique_clique.mem_NP Clique.mem_NP
+
+/-- **Multicolored Clique is `NP`-complete**. -/
+theorem multicoloredClique_npComplete : NPComplete encMulticoloredClique MulticoloredClique :=
+  ⟨multicoloredClique_mem_NP, multicoloredClique_npHard⟩
 
 end Cslib.Complexity
