@@ -7,143 +7,168 @@ Authors: FormalPapers Contributors
 module
 -- upstream: candidate
 
-public import CslibFrontier.Computability.Machines.Turing.MultiTape.Encodings.Rat
-public import CslibFrontier.Computability.Machines.Turing.MultiTape.PolyTime
+public import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Rat
+public import CslibFrontier.Computability.Machines.Turing.MultiTape.Encodings.Decoder
+public import CslibFrontier.Computability.Machines.Turing.MultiTape.Encodings.List
 
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Int.Binary
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.List
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat
+import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat.Binary
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Plain
-import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Rat
-import Mathlib.Data.Rat.Cast.Defs
-import Mathlib.Data.Rat.Lemmas
+import CslibFrontier.Computability.Machines.Turing.MultiTape.TrackedRun
 
 /-!
-# Polynomial-time summation of rational lists
+# Polynomial-Time Summation of Rational Lists and Total Extension via Decoders
 
-This module proves that summing a list of binary-encoded rational numbers (`List.sum : List ℚ → ℚ`)
-is computable in polynomial time under `Turing.MultiTapeTM.encRat`, using a common-denominator
-evaluation that avoids denominator blowup from sequential pairwise additions.
+Two general polynomial-time combinators for `Turing.MultiTapeTM`:
 
-## Main results
-
-* `Turing.MultiTapeTM.ComputableInPolyTime.rat_sum`: `List.sum` on `List ℚ` is computable in
-  polynomial time.
-* `Turing.MultiTapeTM.ComputableInPolyTime.rat_sum'`: composition form of `rat_sum`.
+* `Turing.MultiTapeTM.ComputableInPolyTime.rat_listSum`: summing a list `l : List ℚ` under
+  `encList encRat` is computable in polynomial time (avoiding intermediate GCD blowup warnings by
+  accumulating an unnormalized numerator–denominator pair `(a, b) : ℤ × ℕ` with linearly bounded
+  bit length and normalizing once via `Rat.divInt`).
+* `Turing.MultiTapeTM.ComputableInPolyTime.exists_extension_of_decoder`: every polynomial-time
+  function `f : α → β` into an encoding `encOut` admitting a total polynomial-time `Decoder` extends
+  to a polynomial-time map `g : List Bool → β` on all bit strings `encBits`.
 -/
 
 public section
 
 namespace Turing.MultiTapeTM.ComputableInPolyTime
 
-/-- Common-denominator formula for summing a list of rational numbers in polynomial time. -/
-private def ratSumAux (l : List ℚ) : ℚ :=
-  let D : ℤ := (l.map fun q ↦ (q.den : ℤ)).prod
-  let N : ℤ := (l.zipIdx.map fun p ↦
-    p.1.num * ((l.zipIdx.filter fun r ↦ decide (r.2 ≠ p.2)).map fun r ↦ (r.1.den : ℤ)).prod).sum
-  Rat.divInt N D
+private def unnormRatAdd (acc : ℤ × ℕ) (q : ℚ) : ℤ × ℕ :=
+  (acc.1 * (q.den : ℤ) + q.num * (acc.2 : ℤ), acc.2 * q.den)
 
-private lemma prod_filter_ne_mul (l : List ℚ) (i : ℕ) (hi : i < l.length) :
-    (l[i].den : ℤ) * ((l.zipIdx.filter fun r ↦ decide (r.2 ≠ i)).map fun r ↦ (r.1.den : ℤ)).prod =
-      (l.map fun q ↦ (q.den : ℤ)).prod := by
-  have haux : ∀ (m : List ℚ) (k idx : ℕ),
-      (∀ r ∈ m.zipIdx k, r.2 = idx → False) →
-      ((m.zipIdx k).filter fun r ↦ decide (r.2 ≠ idx)).map (fun r ↦ (r.1.den : ℤ)) =
-        m.map (fun q ↦ (q.den : ℤ)) := by
-    intro m k idx hk
-    have hfilt : (m.zipIdx k).filter (fun r ↦ decide (r.2 ≠ idx)) = m.zipIdx k :=
-      List.filter_eq_self.mpr fun r hr ↦ decide_eq_true (fun h ↦ hk r hr h)
-    rw [hfilt]
-    clear hk hfilt
-    induction m generalizing k with
-    | nil => rfl
-    | cons a as ih => simp [List.zipIdx_cons, ih]
-  have hsplit : ∀ (m : List ℚ) (k j : ℕ) (hj : j < m.length),
-      (m[j].den : ℤ) *
-        (((m.zipIdx k).filter fun r ↦ decide (r.2 ≠ k + j)).map fun r ↦ (r.1.den : ℤ)).prod =
-      (m.map fun q ↦ (q.den : ℤ)).prod := by
-    intro m
-    induction m with
-    | nil => intro _ _ hj; simp at hj
-    | cons a as ih =>
-      intro k j hj
-      cases j with
-      | zero =>
-        simp only [List.getElem_cons_zero, List.zipIdx_cons, List.filter_cons,
-          Nat.add_zero, ne_eq, not_true_eq_false, decide_false, Bool.false_eq_true, ↓reduceIte,
-          List.map_cons, List.prod_cons]
-        congr 2
-        refine haux as (k + 1) k fun r hr heq ↦ ?_
-        have hge := List.le_snd_of_mem_zipIdx hr
+private theorem unnormRatAdd_fold_eq (xs : List ℚ) (a : ℤ) (b : ℕ) (hb : 0 < b) :
+    let r := xs.foldl unnormRatAdd (a, b)
+    0 < r.2 ∧ Rat.divInt r.1 (r.2 : ℤ) = Rat.divInt a (b : ℤ) + xs.sum := by
+  induction xs generalizing a b with
+  | nil => exact ⟨hb, by simp⟩
+  | cons q tl ih =>
+    simp only [List.foldl_cons, List.sum_cons]
+    obtain ⟨hpos, heq⟩ := ih (a * (q.den : ℤ) + q.num * (b : ℤ)) (b * q.den)
+      (Nat.mul_pos hb q.den_pos)
+    refine ⟨hpos, heq.trans ?_⟩
+    have hadd : Rat.divInt (a * (q.den : ℤ) + q.num * (b : ℤ)) ((b * q.den : ℕ) : ℤ) =
+        Rat.divInt a (b : ℤ) + q := by
+      conv_rhs => rw [← Rat.num_divInt_den q]
+      rw [Rat.divInt_add_divInt _ _ (Nat.cast_ne_zero.mpr hb.ne')
+        (Nat.cast_ne_zero.mpr q.den_pos.ne')]
+      push_cast; rfl
+    rw [hadd, add_assoc]
+
+private theorem nat_size_mul_le (x y : ℕ) : (x * y).size ≤ x.size + y.size := by
+  rcases eq_or_ne x 0 with rfl | _
+  · simp
+  · rcases eq_or_ne y 0 with rfl | _
+    · simp
+    · refine Nat.size_le.mpr ?_
+      rw [Nat.pow_add]
+      exact Nat.mul_lt_mul'' (Nat.lt_size_self x) (Nat.lt_size_self y)
+
+private theorem nat_size_add_le_max (x y : ℕ) : (x + y).size ≤ max x.size y.size + 1 := by
+  refine Nat.size_le.mpr ?_
+  have hx : x < 2 ^ max x.size y.size :=
+    (Nat.lt_size_self x).trans_le (Nat.pow_le_pow_right (by omega) (le_max_left _ _))
+  have hy : y < 2 ^ max x.size y.size :=
+    (Nat.lt_size_self y).trans_le (Nat.pow_le_pow_right (by omega) (le_max_right _ _))
+  rw [Nat.pow_succ]; omega
+
+/-- Summing a framed list of rational numbers `List.sum : List ℚ → ℚ` is computable in polynomial
+time under `encList encRat` and `encRat`. -/
+@[fun_prop]
+theorem rat_listSum : ComputableInPolyTime (List.sum : List ℚ → ℚ) (encList encRat) encRat := by
+  have hstep : ComputableInPolyTime
+      (fun p : (ℤ × ℕ) × ℚ => unnormRatAdd p.1 p.2)
+      (encPair (encPair encIntBin encNat) encRat) (encPair encIntBin encNat) := by
+    unfold unnormRatAdd; fun_prop
+  have hfold : ComputableInPolyTime
+      (fun l : List ℚ => l.foldl unnormRatAdd (0, 1))
+      (encList encRat) (encPair encIntBin encNat) := by
+    have hsize_encNat : ∀ n : ℕ, n.size = (encNat n).length := fun n => by
+      rw [encNat_apply, Nat.size_eq_bits_len]
+    have hlen_intBin : ∀ z : ℤ, (encIntBin z).length = 1 + z.natAbs.size := fun z => by
+      rw [encIntBin_apply, List.length_cons, Nat.size_eq_bits_len]; omega
+    have hlen_ratd : ∀ (a : ℤ) (b : ℕ), (encPair encIntBin encNat (a, b)).length =
+        3 + 2 * a.natAbs.size + b.size := fun a b => by
+      rw [length_encPair]; dsimp only; rw [hlen_intBin, ← hsize_encNat]; omega
+    have hsubl : ∀ {l₁ l₂ : List ℚ}, l₁.Sublist l₂ →
+        (encList encRat l₁).length ≤ (encList encRat l₂).length := by
+      intro l₁ l₂ h; induction h with
+      | slnil => exact le_rfl
+      | cons _ _ ih => simp only [encList_cons, List.length_append]; omega
+      | cons_cons _ _ ih => simp only [encList_cons, List.length_append]; omega
+    refine ComputableInPolyTime.foldl' id' (const ((0 : ℤ), (1 : ℕ))) hstep
+      (B := fun l => 16 * ((encList encRat l).length + 1) ^ 1)
+      (PolyBounded.of_forall_le 16 1 fun _ => le_rfl) fun l i _ => ?_
+    have hsz : ∀ (xs : List ℚ) (a : ℤ) (b : ℕ),
+        let r := xs.foldl unnormRatAdd (a, b)
+        r.2.size ≤ b.size + (encList encRat xs).length ∧
+        r.1.natAbs.size ≤ max a.natAbs.size b.size + (encList encRat xs).length := by
+      intro xs; induction xs with
+      | nil => intro a b; exact ⟨by simp, by simp⟩
+      | cons q tl ih =>
+        intro a b
+        simp only [List.foldl_cons, encList_cons, List.length_append]
+        have hqlen : q.num.natAbs.size + q.den.size + 1 ≤
+            (MultiTapeTM.frame (encRat q)).length := by
+          rw [length_frame, encRat_apply, show encRatData (q.num, q.den) =
+            encPair encIntBin encNat (q.num, q.den) from rfl, hlen_ratd]; omega
+        let a' : ℤ := a * (q.den : ℤ) + q.num * (b : ℤ)
+        let b' : ℕ := b * q.den
+        have hb' : b'.size ≤ b.size + q.den.size := nat_size_mul_le b q.den
+        have ha' : a'.natAbs.size ≤
+            max a.natAbs.size b.size + q.num.natAbs.size + q.den.size + 1 := by
+          have htri : a'.natAbs ≤ a.natAbs * q.den + q.num.natAbs * b := by
+            simpa [a', Int.natAbs_mul] using Int.natAbs_add_le (a * q.den) (q.num * b)
+          have hs1 := (Nat.size_le_size htri).trans (nat_size_add_le_max _ _)
+          have hs2 := nat_size_mul_le a.natAbs q.den
+          have hs3 := nat_size_mul_le q.num.natAbs b
+          exact hs1.trans (by
+            have : max (a.natAbs * q.den).size (q.num.natAbs * b).size ≤
+                max a.natAbs.size b.size + q.num.natAbs.size + q.den.size :=
+              max_le (hs2.trans (by have := le_max_left a.natAbs.size b.size; omega))
+                (hs3.trans (by have := le_max_right a.natAbs.size b.size; omega))
+            omega)
+        obtain ⟨h1, h2⟩ := ih a' b'
+        refine ⟨h1.trans (by omega), h2.trans ?_⟩
+        have hm : max a'.natAbs.size b'.size ≤
+            max a.natAbs.size b.size + (MultiTapeTM.frame (encRat q)).length :=
+          max_le (ha'.trans (by omega))
+            (hb'.trans (by have := le_max_right a.natAbs.size b.size; omega))
         omega
-      | succ j' =>
-        have hj' : j' < as.length := by simpa using hj
-        have hne : k ≠ k + (j' + 1) := by omega
-        simp only [List.getElem_cons_succ, List.zipIdx_cons, List.filter_cons]
-        rw [decide_eq_true hne]
-        simp only [↓reduceIte, List.map_cons, List.prod_cons]
-        have hih := ih (k + 1) j' hj'
-        have heq_idx : k + 1 + j' = k + (j' + 1) := by omega
-        rw [heq_idx] at hih
-        rw [← mul_left_comm, hih]
-  simpa using hsplit l 0 i hi
+    obtain ⟨hb_sz, ha_sz⟩ := hsz (l.take i) 0 1
+    set r := (l.take i).foldl unnormRatAdd (0, 1)
+    have htake := hsubl (List.take_sublist i l)
+    have h1 : r.2.size ≤ 1 + (encList encRat (l.take i)).length := by
+      simpa [show (1 : ℕ).size = 1 by decide] using hb_sz
+    have h2 : r.1.natAbs.size ≤ 1 + (encList encRat (l.take i)).length := by
+      simpa [show (0 : ℕ).size = 0 by decide, show (1 : ℕ).size = 1 by decide] using ha_sz
+    rw [show r = (r.1, r.2) from rfl, hlen_ratd, pow_one]; omega
+  have hdiv : ComputableInPolyTime (fun p : ℤ × ℕ => Rat.divInt p.1 (p.2 : ℤ))
+      (encPair encIntBin encNat) encRat := by fun_prop
+  refine (hdiv.comp hfold).of_enc_eq fun l => congrArg encRat ?_
+  have h := (unnormRatAdd_fold_eq l 0 1 Nat.one_pos).2
+  dsimp only [Function.comp_apply]
+  rw [h, Rat.zero_divInt, zero_add]
 
-private lemma ratSumAux_eq_sum (l : List ℚ) : ratSumAux l = l.sum := by
-  unfold ratSumAux
-  set D : ℤ := (l.map fun q ↦ (q.den : ℤ)).prod
-  have hDpos : 0 < D := by
-    refine List.prod_pos fun x hx ↦ ?_
-    obtain ⟨q, _, rfl⟩ := List.mem_map.mp hx
-    exact Nat.cast_pos.mpr q.pos
-  have hDne : (D : ℚ) ≠ 0 := Int.cast_ne_zero.mpr (ne_of_gt hDpos)
-  rw [Rat.divInt_eq_div]
-  apply (div_eq_iff hDne).mpr
-  symm
-  have hsum_zip : l.sum = (l.zipIdx.map Prod.fst).sum := by
-    congr 1
-    have hmap_fst : ∀ (m : List ℚ) (k : ℕ), (m.zipIdx k).map Prod.fst = m := by
-      intro m
-      induction m with
-      | nil => intro _; rfl
-      | cons a as ih => intro k; simp [List.zipIdx_cons, ih]
-    exact (hmap_fst l 0).symm
-  have hmul_sum : ∀ (m : List ℚ) (c : ℚ), m.sum * c = (m.map (· * c)).sum := by
-    intro m c
-    induction m with
-    | nil => simp
-    | cons a as ih => simp [add_mul, ih]
-  have hcast_sum : ∀ m : List ℤ, ((m.sum : ℤ) : ℚ) = (m.map Int.cast).sum := by
-    intro m
-    induction m with
-    | nil => simp
-    | cons a as ih => simp [ih]
-  rw [hsum_zip, hmul_sum, hcast_sum, List.map_map, List.map_map]
-  congr 1
-  refine List.map_congr_left fun p hp ↦ ?_
-  obtain ⟨hi, hp_eq⟩ := List.getElem?_eq_some_iff.mp (List.mem_zipIdx_iff_getElem?.mp hp)
-  have hmul := prod_filter_ne_mul l p.2 hi
-  rw [hp_eq] at hmul
-  have hmulQ : ((p.1.den : ℤ) : ℚ) *
-      (((l.zipIdx.filter fun r ↦ decide (r.2 ≠ p.2)).map fun r ↦ (r.1.den : ℤ)).prod : ℚ) =
-      (D : ℚ) := by exact_mod_cast hmul
-  simp only [Function.comp_apply, Int.cast_mul]
-  rw [← hmulQ, ← mul_assoc]
-  have hq : p.1 * (p.1.den : ℚ) = (p.1.num : ℚ) := Rat.mul_den_eq_num p.1
-  simp only [Int.cast_natCast, hq]
-
-/-- Summing a list of binary-encoded rational numbers is computable in polynomial time. -/
-@[fun_prop]
-theorem rat_sum : ComputableInPolyTime List.sum (encList encRat) encRat := by
-  have haux : ComputableInPolyTime ratSumAux (encList encRat) encRat := by
-    unfold ratSumAux
-    fun_prop
-  exact haux.of_enc_eq fun l ↦ congrArg encRat (ratSumAux_eq_sum l).symm
-
-/-- Composition form of `rat_sum`. -/
-@[fun_prop]
-theorem rat_sum' {α : Type} {encIn : α ↪ List Bool} {f : α → List ℚ}
-    (hf : ComputableInPolyTime f encIn (encList encRat)) :
-    ComputableInPolyTime (fun x ↦ (f x).sum) encIn encRat :=
-  rat_sum.comp hf
+/-- Every polynomial-time function `f : α → β` whose target encoding `encOut` admits a total
+polynomial-time decoder `D : Decoder encOut` extends to a polynomial-time function
+`g : List Bool → β` on all bit strings `encBits` satisfying `g (encIn a) = f a` for all `a : α`. -/
+theorem exists_extension_of_decoder {α β : Type} {encIn : α ↪ List Bool} {encOut : β ↪ List Bool}
+    (D : Decoder encOut) {f : α → β} (hf : ComputableInPolyTime f encIn encOut) :
+    ∃ g : List Bool → β, ComputableInPolyTime g encBits encOut ∧ ∀ a, g (encIn a) = f a := by
+  obtain ⟨t, _, ht, -, k, State, hfin, tm, htm⟩ := hf
+  obtain ⟨c, d, ht⟩ := Cslib.polynomiallyBounded_iff_le.mp ht
+  let p : Polynomial ℕ := Polynomial.C c * (Polynomial.X + 1) ^ d
+  have hp (w : List Bool) : t w.length ≤ p.eval w.length := by simpa [p] using ht w.length
+  refine ⟨fun w => D.decode (trackedRun tm (w, p.eval w.length)).1.output, ?_, fun a => ?_⟩
+  · have hsteps : ComputableInPolyTime (fun w : List Bool => p.eval w.length) encBits encUnary :=
+      (unary_eval p).comp (encoding_length encBits)
+    have hrun := (computableInPolyTime_trackedRun tm).comp (id'.prod hsteps)
+    exact D.computableInPolyTime.comp (finiteCfg_output.comp (.fst' hrun))
+  · dsimp only
+    rw [(trackedAgrees_trackedRun tm (encIn a) (p.eval (encIn a).length)).output,
+      ((htm a).runFrom_of_le (hp (encIn a))).2, D.decode_enc]
 
 end Turing.MultiTapeTM.ComputableInPolyTime
