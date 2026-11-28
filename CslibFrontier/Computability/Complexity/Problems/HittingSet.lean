@@ -1,1096 +1,756 @@
 /-
-Copyright (c) 2026 Google LLC. All rights reserved.
+Copyright (c) 2026 FormalPapers Contributors. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
-Authors: Google LLC
+Authors: FormalPapers Contributors
 -/
 
 module
 -- upstream: candidate
 
-public import CslibFrontier.Computability.Complexity.Parameterized.WHierarchy.Clique
-public import CslibFrontier.Computability.Complexity.Problems.DominatingSet
-public import CslibFrontier.Computability.PCP.Approximation.SetCover.LundYannakakis
-import CslibFrontier.Computability.Circuit.Encoding.Layer
-import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.Lists
+public import CslibFrontier.Init
+public import CslibFrontier.Computability.Complexity.Problems.SetCover
+public import CslibFrontier.Computability.Complexity.Problems.VertexCover
+public import CslibFrontier.Computability.PCP.Approximation.SetCover.ApproxReduction
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.BitString
-import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Fold
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Length
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.List
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Membership
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat.Binary
-import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Option
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Plain
-import CslibFrontier.Foundations.Data.List.SelectDistinct
-import Mathlib.Data.List.Enum
+import CslibFrontier.Tactic.EncLen
 import Mathlib.Data.List.GetD
 
 /-!
-# Hitting Set: Dual Equivalence with Set Cover, Dominating Set Reduction, and `W[2]` Membership
+# Hitting Set and Rank-Restricted $d$-Hitting Set
 
-Under standard Lean axioms, this module formalizes the classic **Hitting Set** problem over
-`Cslib.Complexity.SetSystem`, establishes its exact polynomial-time, FPT, and
-approximation-preserving duality with `Cslib.Complexity.SetCover`, reduces `DominatingSet` to
-`SetCover` and `HittingSet`, and proves that `HittingSet` and `SetCover` belong to **`W[2]`**
-(see `CslibFrontier.Computability.Complexity.Parameterized.WHierarchy.HittingSet` for matching
-`W[2]`-hardness):
-
-1. **Hitting Set (`IsHittingSet`, `HittingSet`, `Hittable`, `optHittingSize`, `minHittingSet`)**:
-   given `(S, k)` (`S : SetSystem`), select at most `k` elements of `S.ground` intersecting every
-   candidate set `A ∈ S.sets`.
-2. **Incidence transposition (`transposeSetSystem`)**: swapping ground elements and candidate-set
-   indices gives a single involutive polynomial-time, parameter-preserving, optimum-preserving, and
-   ratio-1 approximation-preserving reduction in both directions (`SetCover ↔ HittingSet`),
-   yielding `NP`-completeness and unconditional constant-factor `NP`-inapproximability of
-   `HittingSet`.
-3. **Closed-neighborhood reduction (`dominatingSetToSetSystem`, `dominatingSetToHittingSystem`)**:
-   maps any graph `G` to a `Coverable` / `Hittable` set system whose covers and hitting sets of
-   size `≤ k` correspond 1-to-1 to dominating sets of `G` of size `≤ k`.
-4. **Membership in `W[2]` and specification-driven set systems (`hittingSet_mem_W`,
-   `setCover_mem_W`, `ofSpecSetSystem`)**: membership in `W[2]` via a two-layer `AND`-of-`OR`s
-   `WeftCircuit 2 2` with `k` dummy padding inputs, together with a reusable polynomial-time
-   specification-driven `SetSystem` builder.
+Finite hypergraphs (`Cslib.Complexity.HypergraphInstance`) and Hitting Set instances
+(`Cslib.Complexity.HittingSetInstance`) over natural-number vertex identifiers, together with
+Karp's `HittingSet` decision problem, its rank-restricted variant `DHittingSet d`
+($d$-Hitting Set, $\mathrm{NP}$-complete for every $d \ge 2$), the minimization problem
+`minHittingSet`, its exact cost-preserving polynomial-time duality with `minSetCover`, and its
+$(1 + \ln |E(H)|)$-approximation via `SetSystem.greedyIndices`.
 
 ## Main definitions
 
-* `Cslib.Complexity.encHittingSet`,
-  `Cslib.Complexity.IsHittingSet`, `Cslib.Complexity.HittingSet`,
-  `Cslib.Complexity.Hittable`, `Cslib.Complexity.isHittingList`,
-  `Cslib.Complexity.optHittingSize`,
-  `Cslib.Complexity.minHittingSet`: Hitting Set decision and optimization carriers.
-* `Cslib.Complexity.transposeSetSystem`: dual incidence transposition between
-  `SetCover` and `HittingSet`.
-* `Cslib.Complexity.dominatingSetToSetSystem`,
-  `Cslib.Complexity.dominatingSetToHittingSystem`: closed-neighborhood reductions
-  from `DominatingSet`.
-* `Cslib.Complexity.ofSpecSetSystem`: generic specification-driven set-system
-  constructor.
+* `Cslib.Complexity.HypergraphInstance`, `Cslib.Complexity.HittingSetInstance`,
+  `Cslib.Complexity.encHypergraph`, `Cslib.Complexity.encHittingSet`: finite hypergraphs and
+  Hitting Set instances with framed binary encodings.
+* `Cslib.Complexity.HittingSet`, `Cslib.Complexity.DHittingSet`: decision problems Hitting Set
+  and $d$-Hitting Set.
+* `Cslib.Complexity.minHittingSet`: minimization formulation of Hitting Set.
 
 ## Main results
 
-* `Cslib.Complexity.transposeSetSystem_setCover_iff`,
-  `Cslib.Complexity.transposeSetSystem_hittingSet_iff`,
-  `Cslib.Complexity.approxPreservingReducible_setCover_hittingSet`: exact duality.
-* `Cslib.Complexity.hittingSet_npComplete`,
-  `Cslib.Complexity.P_eq_NP_of_hittingSet_approx_const`: `NP`-completeness and
-  constant-factor inapproximability.
-* `Cslib.Complexity.dominatingSetToHittingSystem_mem_iff`: exact dominating-set to
-  hitting-set reduction.
-* `Cslib.Complexity.hittingSet_mem_W`,
-  `Cslib.Complexity.setCover_mem_W`: membership of `HittingSet` and `SetCover` in
-  `W[2]`.
-* `Cslib.Complexity.mem_hittingSet_ofSpecSetSystem_iff`,
-  `Cslib.Complexity.computableInPolyTime_ofSpecSetSystem`: correctness and
-  polynomial-time certificate for `ofSpecSetSystem`.
-
-## Tags
-
-hitting set, set cover, dominating set, W[2] membership, approximation-preserving reduction
+* `Cslib.Complexity.HittingSet_mem_NP`, `Cslib.Complexity.DHittingSet_mem_NP`: membership in
+  `NP`.
+* `Cslib.Complexity.DHittingSet_npComplete` ($d \ge 2$),
+  `Cslib.Complexity.HittingSet_npComplete`: `NP`-completeness via `VertexCover`.
+* `Cslib.Complexity.approxPreservingReducible_minSetCover_minHittingSet`: exact
+  cost-preserving polynomial-time reduction from `minSetCover` to `minHittingSet`.
+* `Cslib.Complexity.greedyHittingSet_feasible_and_bound`: $(1 + \ln |E(H)|)$ greedy upper bound.
 -/
 
 public section
 
-open Cslib Cslib.Complexity Cslib.Circuits Cslib.Circuits.Boolean Cslib.Circuits.Boolean.Unbounded
-open Turing.MultiTapeTM ComputableInPolyTime
-
 namespace Cslib.Complexity
 
-/-! ### 1. Hitting Set Decision and Optimization Definitions -/
+open Turing.MultiTapeTM ComputableInPolyTime
 
-/-- Framed binary encoding of `(SetSystem, k)` instances of `HittingSet`. -/
-abbrev encHittingSet : SetSystem × ℕ ↪ List Bool := encSetCover
+/-! ### Encoded Hypergraphs and Hitting Set Instances -/
 
-/-- A finite set `H` is a hitting set of `S : SetSystem` when every element of `H` belongs to
-`S.ground` and every set `A ∈ S.sets` intersects `H`. -/
-@[expose] def IsHittingSet (S : SetSystem) (H : Finset ℕ) : Prop :=
-  (∀ u ∈ H, u ∈ S.ground) ∧ ∀ A ∈ S.sets, ∃ u ∈ H, u ∈ A
+/-- A finite hypergraph $H = (V(H), E(H))$ over natural-number vertex identifiers. -/
+@[ext]
+structure HypergraphInstance where
+  /-- Declared vertices $V(H)$ of the hypergraph. -/
+  vertices : List ℕ
+  /-- Hyperedges $E(H)$, each represented as a list of vertex identifiers. -/
+  edges : List (List ℕ)
+  deriving DecidableEq, Repr, Inhabited
 
-/-- **Hitting Set**: pairs `(S, k)` admitting a hitting set `H` of cardinality at most `k`. -/
-@[expose] def HittingSet : Set (SetSystem × ℕ) :=
-  {p | ∃ H : Finset ℕ, IsHittingSet p.1 H ∧ H.card ≤ p.2}
+/-- Framed binary encoding of `HypergraphInstance`. -/
+enc_structure encHypergraph : HypergraphInstance where
+  vertices : (encList encNat),
+  edges : encNatSetList
 
-/-- Unfolding characterization of `HittingSet`. -/
-theorem mem_hittingSet_iff {S : SetSystem} {k : ℕ} :
-    (S, k) ∈ HittingSet ↔ ∃ H : Finset ℕ, IsHittingSet S H ∧ H.card ≤ k := by
-  unfold IsHittingSet HittingSet; rfl
+attribute [fun_prop] encHypergraph_vertices_polyTime encHypergraph_edges_polyTime
+  encHypergraph_mk_polyTime
 
-/-- A set system `S` is hittable when some subset of `S.ground` hits every set in `S.sets`. -/
-@[expose] def Hittable (S : SetSystem) : Prop :=
-  ∃ H : Finset ℕ, IsHittingSet S H
+/-- An instance $(H, \alpha)$ of `HittingSet`. -/
+@[ext]
+structure HittingSetInstance where
+  /-- Input hypergraph $H$. -/
+  hypergraph : HypergraphInstance
+  /-- Maximum allowed hitting-set size $\alpha$. -/
+  bound : ℕ
+  deriving DecidableEq, Repr, Inhabited
 
-/-- Executable Boolean test for `Hittable S`. -/
-@[expose] def hittableBool (S : SetSystem) : Bool :=
-  S.sets.all fun A => S.ground.any fun u => decide (u ∈ A)
+/-- Framed binary encoding of `HittingSetInstance`. -/
+enc_structure encHittingSet : HittingSetInstance where
+  hypergraph : encHypergraph,
+  bound : encNat
 
-/-- `hittableBool S` evaluates to `true` if and only if `Hittable S`. -/
-theorem hittableBool_eq_true_iff (S : SetSystem) :
-    hittableBool S = true ↔ Hittable S := by
+attribute [fun_prop] encHittingSet_hypergraph_polyTime encHittingSet_bound_polyTime
+  encHittingSet_mk_polyTime
+
+namespace HypergraphInstance
+
+/-- Distinct declared vertices of `H` in order of first occurrence. -/
+def distinctVertices (H : HypergraphInstance) : List ℕ :=
+  selectDistinct H.vertices (List.replicate H.vertices.length true)
+
+theorem mem_distinctVertices {H : HypergraphInstance} {v : ℕ} :
+    v ∈ H.distinctVertices ↔ v ∈ H.vertices :=
+  mem_selectDistinct_replicate
+
+theorem nodup_distinctVertices (H : HypergraphInstance) : H.distinctVertices.Nodup :=
+  nodup_selectDistinct _ _
+
+theorem length_distinctVertices (H : HypergraphInstance) :
+    H.distinctVertices.length = H.vertices.toFinset.card :=
+  length_selectDistinct_replicate H.vertices
+
+@[fun_prop]
+theorem computableInPolyTime_distinctVertices :
+    ComputableInPolyTime distinctVertices encHypergraph (encList encNat) := by
+  unfold distinctVertices
+  fun_prop
+
+/-- Distinct declared vertices belonging to a hyperedge list `e`. -/
+def cleanEdge (H : HypergraphInstance) (e : List ℕ) : List ℕ :=
+  H.distinctVertices.filter fun v => decide (v ∈ e)
+
+theorem length_cleanEdge_le_distinctVertices (H : HypergraphInstance) (e : List ℕ) :
+    (H.cleanEdge e).length ≤ H.distinctVertices.length :=
+  List.Sublist.length_le List.filter_sublist
+
+theorem mem_cleanEdge {H : HypergraphInstance} {e : List ℕ} {v : ℕ} :
+    v ∈ H.cleanEdge e ↔ v ∈ H.vertices ∧ v ∈ e := by
+  simp [cleanEdge, mem_distinctVertices]
+
+theorem nodup_cleanEdge (H : HypergraphInstance) (e : List ℕ) :
+    (H.cleanEdge e).Nodup :=
+  H.nodup_distinctVertices.filter _
+
+theorem length_cleanEdge_eq_card (H : HypergraphInstance) (e : List ℕ) :
+    (H.cleanEdge e).length = (e.filter (· ∈ H.vertices)).toFinset.card := by
+  rw [← List.toFinset_card_of_nodup (H.nodup_cleanEdge e)]
+  congr 1
+  ext v
+  simp [mem_cleanEdge, and_comm]
+
+@[fun_prop]
+theorem computableInPolyTime_cleanEdge :
+    ComputableInPolyTime (fun p : HypergraphInstance × List ℕ => p.1.cleanEdge p.2)
+      (encPair encHypergraph (encList encNat)) (encList encNat) := by
+  unfold cleanEdge
+  fun_prop
+
+/-- A subset $U \subseteq V(H)$ is a *hitting set* of `H` if $U \cap e \neq \emptyset$ for
+every $e \in E(H)$. -/
+@[expose] def IsHittingSet (H : HypergraphInstance) (U : Finset ℕ) : Prop :=
+  (∀ v ∈ U, v ∈ H.vertices) ∧ ∀ e ∈ H.edges, ∃ v ∈ U, v ∈ e
+
+/-- `H` admits at least one hitting set (equivalently, every hyperedge contains at least one
+declared vertex). -/
+@[expose] def Hittable (H : HypergraphInstance) : Prop :=
+  ∃ U : Finset ℕ, H.IsHittingSet U
+
+/-- Executable test for whether every hyperedge contains at least one declared vertex. -/
+@[expose] def hittableBool (H : HypergraphInstance) : Bool :=
+  H.edges.all fun e => H.vertices.any fun v => decide (v ∈ e)
+
+theorem hittableBool_eq_true_iff (H : HypergraphInstance) :
+    H.hittableBool = true ↔ H.Hittable := by
   simp only [hittableBool, List.all_eq_true, List.any_eq_true, decide_eq_true_eq, Hittable,
     IsHittingSet]
   constructor
   · intro h
-    refine ⟨S.ground.toFinset, fun _ hu => List.mem_toFinset.1 hu, fun A hA => ?_⟩
-    obtain ⟨u, huG, huA⟩ := h A hA
-    exact ⟨u, List.mem_toFinset.2 huG, huA⟩
-  · rintro ⟨H, hHG, hcov⟩ A hA
-    obtain ⟨u, huH, huA⟩ := hcov A hA
-    exact ⟨u, hHG u huH, huA⟩
+    refine ⟨H.vertices.toFinset, fun v hv => List.mem_toFinset.mp hv, fun e he => ?_⟩
+    obtain ⟨v, hvV, hve⟩ := h e he
+    exact ⟨v, List.mem_toFinset.mpr hvV, hve⟩
+  · rintro ⟨U, hUV, hhit⟩ e he
+    obtain ⟨v, hvU, hve⟩ := hhit e he
+    exact ⟨v, hUV v hvU, hve⟩
 
-/-- Polynomial-time certificate for `hittableBool`. -/
 @[fun_prop]
 theorem computableInPolyTime_hittableBool :
-    ComputableInPolyTime hittableBool encSetSystem encBool := by
+    ComputableInPolyTime hittableBool encHypergraph encBool := by
   unfold hittableBool
   fun_prop
 
-/-- Executable Boolean verifier checking whether a list `L` of elements forms a hitting set of
-`S`. -/
-@[expose] def isHittingList (S : SetSystem) (L : List ℕ) : Bool :=
-  L.all (fun u => decide (u ∈ S.ground)) &&
-    S.sets.all fun A => L.any fun u => decide (u ∈ A)
+/-- Executable test that a list `C` of vertex identifiers forms a hitting set of `H`. -/
+@[expose] def isHittingList (H : HypergraphInstance) (C : List ℕ) : Bool :=
+  C.all (fun v => decide (v ∈ H.vertices)) &&
+    H.edges.all fun e => C.any fun v => decide (v ∈ e)
 
-/-- Correctness of `isHittingList`. -/
-theorem isHittingList_eq_true_iff (S : SetSystem) (L : List ℕ) :
-    isHittingList S L = true ↔ IsHittingSet S L.toFinset := by
-  simp [isHittingList, IsHittingSet, Bool.and_eq_true, List.all_eq_true, List.any_eq_true,
-    decide_eq_true_eq]
+theorem isHittingList_eq_true_iff (H : HypergraphInstance) (C : List ℕ) :
+    H.isHittingList C = true ↔ H.IsHittingSet C.toFinset := by
+  simp [isHittingList, IsHittingSet]
 
-/-- Polynomial-time certificate for `isHittingList`. -/
 @[fun_prop]
 theorem computableInPolyTime_isHittingList :
-    ComputableInPolyTime (fun p : SetSystem × List ℕ => isHittingList p.1 p.2)
-      (encPair encSetSystem (encList encNat)) encBool := by
+    ComputableInPolyTime (fun p : HypergraphInstance × List ℕ => p.1.isHittingList p.2)
+      (encPair encHypergraph (encList encNat)) encBool := by
   unfold isHittingList
   fun_prop
 
-/-- Minimum cardinality of a hitting set of `S` when `Hittable S` holds (and `0` otherwise). -/
-noncomputable def optHittingSize (S : SetSystem) : ℕ := by
-  classical
-  exact if h : Hittable S then
-    Nat.find (⟨h.choose.card, h.choose, h.choose_spec, le_rfl⟩ :
-      ∃ n : ℕ, ∃ H : Finset ℕ, IsHittingSet S H ∧ H.card ≤ n)
-  else 0
+/-- `H` has *rank* at most `d` if every hyperedge contains at most `d` distinct declared
+vertices. -/
+@[expose] def HasRankAtMost (d : ℕ) (H : HypergraphInstance) : Prop :=
+  ∀ e ∈ H.edges, (H.cleanEdge e).length ≤ d
 
-/-- Every hitting set of `S` has cardinality at least `optHittingSize S`. -/
-theorem optHittingSize_le {S : SetSystem} {H : Finset ℕ} (hH : IsHittingSet S H) :
-    optHittingSize S ≤ H.card := by
-  classical
-  have hS : Hittable S := ⟨H, hH⟩
-  simp only [optHittingSize, hS, ↓reduceDIte]
-  exact Nat.find_min' _ ⟨H, hH, le_rfl⟩
+/-- Executable test for `HasRankAtMost d`. -/
+@[expose] def hasRankAtMostBool (d : ℕ) (H : HypergraphInstance) : Bool :=
+  H.edges.all fun e => decide ((H.cleanEdge e).length ≤ d)
 
-/-- Every hittable set system admits a hitting set of cardinality `optHittingSize S`. -/
-theorem exists_isHittingSet_optHittingSize {S : SetSystem} (hS : Hittable S) :
-    ∃ H : Finset ℕ, IsHittingSet S H ∧ H.card = optHittingSize S := by
-  classical
-  have hex : ∃ n : ℕ, ∃ H : Finset ℕ, IsHittingSet S H ∧ H.card ≤ n :=
-    ⟨hS.choose.card, hS.choose, hS.choose_spec, le_rfl⟩
-  obtain ⟨H, hH, hle⟩ := Nat.find_spec hex
-  have heq : optHittingSize S = Nat.find hex := by simp only [optHittingSize, hS, ↓reduceDIte]
-  exact ⟨H, hH, le_antisymm (heq ▸ hle) (optHittingSize_le hH)⟩
+theorem hasRankAtMostBool_eq_true_iff (d : ℕ) (H : HypergraphInstance) :
+    H.hasRankAtMostBool d = true ↔ H.HasRankAtMost d := by
+  simp [hasRankAtMostBool, HasRankAtMost]
 
-/-- On hittable set systems, `(S, k) ∈ HittingSet` iff `optHittingSize S ≤ k`. -/
-theorem mem_hittingSet_iff_optHittingSize_le {S : SetSystem} (hS : Hittable S) {k : ℕ} :
-    (S, k) ∈ HittingSet ↔ optHittingSize S ≤ k := by
-  rw [mem_hittingSet_iff]
-  constructor
-  · rintro ⟨H, hH, hle⟩
-    exact (optHittingSize_le hH).trans hle
-  · intro hle
-    obtain ⟨H, hH, hcard⟩ := exists_isHittingSet_optHittingSize hS
-    exact ⟨H, hH, hcard.le.trans hle⟩
-
-/-- Minimization problem packaging of `HittingSet` on hittable set systems. -/
-@[expose] noncomputable def minHittingSet : MinOptProblem SetSystem (List ℕ) where
-  IsValid := Hittable
-  Feasible S L := isHittingList S L = true
-  cost _ L := (L.length : ℝ)
-  opt S := (optHittingSize S : ℝ)
-  opt_le S L _ hL := by
-    have hH := (isHittingList_eq_true_iff S L).1 hL
-    have hle : optHittingSize S ≤ L.length := (optHittingSize_le hH).trans L.toFinset_card_le
-    exact_mod_cast hle
-  exists_opt S hS := by
-    obtain ⟨H, hH, hcard⟩ := exists_isHittingSet_optHittingSize hS
-    refine ⟨H.toList, (isHittingList_eq_true_iff S H.toList).2 ?_, ?_⟩
-    · simpa [Finset.toList_toFinset] using hH
-    · simp [Finset.length_toList, hcard]
-
-@[simp]
-theorem minHittingSet_isValid (S : SetSystem) :
-    minHittingSet.IsValid S = Hittable S := by
-  unfold Hittable; rfl
-
-@[simp]
-theorem minHittingSet_feasible (S : SetSystem) (L : List ℕ) :
-    minHittingSet.Feasible S L = (isHittingList S L = true) := rfl
-
-@[simp]
-theorem minHittingSet_cost (S : SetSystem) (L : List ℕ) :
-    minHittingSet.cost S L = (L.length : ℝ) := rfl
-
-@[simp]
-theorem minHittingSet_opt (S : SetSystem) :
-    minHittingSet.opt S = (optHittingSize S : ℝ) := by
-  unfold optHittingSize; rfl
-
-/-! ### 2. Incidence Transposition (`SetCover ↔ HittingSet`) -/
-
-/-- Dual incidence transposition of a set system: ground elements become candidate-set indices
-`0, …, |S.sets| -
-  1`, and each `u ∈ S.ground` defines the set of indices `i` with `u ∈ S.sets[i]`. -/
-@[expose] def transposeSetSystem (S : SetSystem) : SetSystem :=
-  ⟨List.range S.sets.length,
-    S.ground.map fun u => (List.range S.sets.length).filter fun i =>
-      decide (u ∈ S.sets.getD i [])⟩
-
-/-- Polynomial-time certificate for `transposeSetSystem`. -/
 @[fun_prop]
-theorem computableInPolyTime_transposeSetSystem :
-    ComputableInPolyTime transposeSetSystem encSetSystem encSetSystem := by
-  have hr : ComputableInPolyTime (fun S : SetSystem => List.range S.sets.length)
-      encSetSystem (encList encNat) := by
-    have h1 : ComputableInPolyTime (fun S : SetSystem => List.range S.sets.length)
-        encSetSystem (encList encUnary) := by fun_prop
-    have h2 : ComputableInPolyTime (List.map (fun n : ℕ => n))
-        (encList encUnary) (encList encNat) := map unary_to_binary
-    simpa only [Function.comp_def, List.map_id_fun', id_eq] using h2.comp h1
-  have hsets : ComputableInPolyTime
-      (fun S : SetSystem => S.ground.map fun u =>
-        (List.range S.sets.length).filter fun i => decide (u ∈ S.sets.getD i []))
-      encSetSystem encNatSetList := by
-    refine mapWithInput (by fun_prop) ?_
-    refine filterWithInput (hr.comp (fst _ _)) ?_
-    have hget := listGetD_binary (encA := encList encNat) (encL := encNatSetList) ([] : List ℕ)
-      (by fun_prop : ComputableInPolyTime (fun q : (SetSystem × ℕ) × ℕ => q.1.1.sets)
-        (encPair (encPair encSetSystem encNat) encNat) encNatSetList)
-      (snd _ _)
-    have hu : ComputableInPolyTime (fun q : (SetSystem × ℕ) × ℕ => q.1.2)
-        (encPair (encPair encSetSystem encNat) encNat) encNat := (snd _ _).comp (fst _ _)
-    exact (by fun_prop : ComputableInPolyTime (fun r : ℕ × List ℕ => decide (r.1 ∈ r.2))
-      (encPair encNat (encList encNat)) encBool).comp (hu.prod hget)
-  unfold transposeSetSystem
-  exact computableInPolyTime_setSystemMk hr hsets
+theorem computableInPolyTime_hasRankAtMostBool (d : ℕ) :
+    ComputableInPolyTime (hasRankAtMostBool d) encHypergraph encBool := by
+  unfold hasRankAtMostBool
+  refine allWithInput (by fun_prop) ?_
+  have hclean : ComputableInPolyTime
+      (fun p : HypergraphInstance × List ℕ => (p.1.cleanEdge p.2).length)
+      (encPair encHypergraph (encList encNat)) encNat :=
+    unary_to_binary.comp ((length_list encNat).comp computableInPolyTime_cleanEdge)
+  exact binary_le' hclean (const d)
 
-/-- `S` is `Coverable` if and only if `transposeSetSystem S` is `Hittable`. -/
-theorem hittable_transposeSetSystem_iff_coverable (S : SetSystem) :
-    Hittable (transposeSetSystem S) ↔ S.Coverable := by
-  rw [← hittableBool_eq_true_iff, ← SetSystem.coverableBool_eq_true_iff]
-  simp only [hittableBool, SetSystem.coverableBool, transposeSetSystem, List.all_map,
-    Function.comp_def, List.all_eq_true, List.any_eq_true, List.mem_range, List.mem_filter,
-    decide_eq_true_eq]
-  refine forall_congr' fun u => imp_congr_right fun _ => ?_
-  constructor
-  · rintro ⟨i, _, _, hui⟩
-    have hi : i < S.sets.length := by
-      by_contra hge
-      rw [List.getD_eq_default _ _ (Nat.le_of_not_lt hge)] at hui
-      cases hui
-    rw [List.getD_eq_getElem _ _ hi] at hui
-    exact ⟨S.sets[i], List.getElem_mem hi, hui⟩
-  · rintro ⟨A, hA, hui⟩
-    obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.1 hA
-    exact ⟨i, hi, ⟨hi, by rwa [List.getD_eq_getElem _ _ hi]⟩⟩
+/-- Rank of a hypergraph, defined as the maximum size of its cleaned hyperedges (`0` if
+`E(H) = ∅`). -/
+def rank (H : HypergraphInstance) : ℕ :=
+  (H.edges.map fun e => (H.cleanEdge e).length).foldl max 0
 
-/-- `(transposeSetSystem S, k)` belongs to `HittingSet` if and only if `(S, k) ∈ SetCover`. -/
-theorem transposeSetSystem_setCover_iff (S : SetSystem) (k : ℕ) :
-    (transposeSetSystem S, k) ∈ HittingSet ↔ (S, k) ∈ SetCover := by
-  classical
-  rw [mem_hittingSet_iff, mem_SetCover_iff]
-  constructor
-  · rintro ⟨H, ⟨hHG, hHcov⟩, hcard⟩
-    let C : Finset (Fin S.sets.length) :=
-      Finset.univ.filter fun i : Fin S.sets.length => i.1 ∈ H
-    have hCcard : C.card ≤ H.card := by
-      have himg : C.image Fin.val ⊆ H := by
-        intro x hx
-        obtain ⟨i, hi, rfl⟩ := Finset.mem_image.1 hx
-        exact (Finset.mem_filter.1 hi).2
-      rw [← Finset.card_image_of_injective C Fin.val_injective]
-      exact Finset.card_le_card himg
-    refine ⟨C, fun u hu => ?_, hCcard.trans hcard⟩
-    have hAu : ((List.range S.sets.length).filter fun i => decide (u ∈ S.sets.getD i [])) ∈
-        (transposeSetSystem S).sets := List.mem_map_of_mem hu
-    obtain ⟨i, hiH, hiF⟩ := hHcov _ hAu
-    obtain ⟨hi_lt, hui⟩ := List.mem_filter.1 hiF
-    have hi_lt' : i < S.sets.length := List.mem_range.1 hi_lt
-    rw [decide_eq_true_eq, List.getD_eq_getElem _ _ hi_lt'] at hui
-    exact ⟨⟨i, hi_lt'⟩, Finset.mem_filter.2 ⟨Finset.mem_univ _, hiH⟩, hui⟩
-  · rintro ⟨C, hC, hcard⟩
-    let H : Finset ℕ := C.image Fin.val
-    refine ⟨H, ⟨?_, ?_⟩, Finset.card_image_le.trans hcard⟩
-    · intro i hi
-      obtain ⟨j, _, rfl⟩ := Finset.mem_image.1 hi
-      exact List.mem_range.2 j.isLt
-    · intro A hA
-      obtain ⟨u, hu, rfl⟩ := List.mem_map.1 hA
-      obtain ⟨j, hjC, huj⟩ := hC u hu
-      refine ⟨j.1, Finset.mem_image_of_mem _ hjC,
-        List.mem_filter.2 ⟨List.mem_range.2 j.isLt, decide_eq_true ?_⟩⟩
-      rwa [List.getD_eq_getElem _ _ j.isLt]
+private theorem foldl_max_ge (l : List ℕ) (init : ℕ) :
+    init ≤ l.foldl max init ∧ ∀ x ∈ l, x ≤ l.foldl max init := by
+  induction l generalizing init with
+  | nil => exact ⟨le_rfl, fun _ h => by simp at h⟩
+  | cons a l ih =>
+    obtain ⟨hinit, hmem⟩ := ih (max init a)
+    refine ⟨le_trans (le_max_left _ _) hinit, fun x hx => ?_⟩
+    rcases List.mem_cons.mp hx with rfl | hxl
+    · exact le_trans (le_max_right _ _) hinit
+    · exact hmem x hxl
 
-/-- `(transposeSetSystem S, k)` belongs to `SetCover` if and only if `(S, k) ∈ HittingSet`. -/
-theorem transposeSetSystem_hittingSet_iff (S : SetSystem) (k : ℕ) :
-    (transposeSetSystem S, k) ∈ SetCover ↔ (S, k) ∈ HittingSet := by
-  classical
-  rw [mem_SetCover_iff, mem_hittingSet_iff]
-  constructor
-  · rintro ⟨C, hC, hcard⟩
-    have hlen : (transposeSetSystem S).sets.length = S.ground.length := by
-      simp [transposeSetSystem]
-    let H : Finset ℕ := C.image fun i => S.ground[i.1]'(i.isLt.trans_eq hlen)
-    refine ⟨H, ⟨?_, ?_⟩, Finset.card_image_le.trans hcard⟩
-    · intro u hu
-      obtain ⟨i, _, rfl⟩ := Finset.mem_image.1 hu
-      exact List.getElem_mem _
-    · intro A hA
-      obtain ⟨j, hj, rfl⟩ := List.mem_iff_getElem.1 hA
-      have hjG : j ∈ (transposeSetSystem S).ground := List.mem_range.2 hj
-      obtain ⟨i, hiC, hij⟩ := hC j hjG
-      have hi_lt : i.1 < S.ground.length := i.isLt.trans_eq hlen
-      have hset_eq : (transposeSetSystem S).sets[i] =
-          (List.range S.sets.length).filter fun idx =>
-            decide ((S.ground[i.1]'hi_lt) ∈ S.sets.getD idx []) := by
-        rw [Fin.getElem_fin]
-        simp [transposeSetSystem]
-      rw [hset_eq, List.mem_filter, decide_eq_true_eq, List.getD_eq_getElem _ _ hj] at hij
-      exact ⟨S.ground[i.1]'hi_lt, Finset.mem_image_of_mem _ hiC, hij.2⟩
-  · rintro ⟨H, ⟨hHG, hHcov⟩, hcard⟩
-    have hlen : (transposeSetSystem S).sets.length = S.ground.length := by
-      simp [transposeSetSystem]
-    have hidx_lt (u : ℕ) (hu : u ∈ H) : S.ground.idxOf u < (transposeSetSystem S).sets.length :=
-      hlen ▸ List.idxOf_lt_length_of_mem (hHG u hu)
-    let C : Finset (Fin (transposeSetSystem S).sets.length) :=
-      H.attach.image fun u => ⟨S.ground.idxOf u.1, hidx_lt u.1 u.2⟩
-    refine ⟨C, ?_, (Finset.card_image_le.trans (by simp)).trans hcard⟩
-    intro j hjG
-    have hj_lt : j < S.sets.length := List.mem_range.1 hjG
-    obtain ⟨u, huH, huj⟩ := hHcov S.sets[j] (List.getElem_mem hj_lt)
-    refine ⟨⟨S.ground.idxOf u, hidx_lt u huH⟩,
-      Finset.mem_image_of_mem _ (Finset.mem_attach _ ⟨u, huH⟩), ?_⟩
-    have hu_lt : S.ground.idxOf u < S.ground.length := List.idxOf_lt_length_of_mem (hHG u huH)
-    have hget_u : S.ground[S.ground.idxOf u]'hu_lt = u := List.getElem_idxOf hu_lt
-    simp only [transposeSetSystem, Fin.getElem_fin, List.getElem_map, hget_u, List.mem_filter,
-      List.mem_range, decide_eq_true_eq]
-    exact ⟨hj_lt, by rwa [List.getD_eq_getElem _ _ hj_lt]⟩
+theorem hasRankAtMost_rank (H : HypergraphInstance) :
+    H.HasRankAtMost H.rank := by
+  intro e he
+  exact (foldl_max_ge _ 0).2 _ (List.mem_map_of_mem he)
 
-/-- Optimum equality under `transposeSetSystem`:
-`optHittingSize (transposeSetSystem S) = S.optCoverSize`. -/
-theorem optHittingSize_transposeSetSystem (S : SetSystem) :
-    optHittingSize (transposeSetSystem S) = S.optCoverSize := by
-  by_cases hS : S.Coverable
-  · have hH : Hittable (transposeSetSystem S) := (hittable_transposeSetSystem_iff_coverable S).2 hS
-    refine le_antisymm ?_ ?_
-    · obtain ⟨C, hC, hcard⟩ := SetSystem.exists_isCover_optCoverSize hS
-      have hm : (transposeSetSystem S, S.optCoverSize) ∈ HittingSet :=
-        (transposeSetSystem_setCover_iff S S.optCoverSize).2 (mem_SetCover_iff.2 ⟨C, hC, hcard.le⟩)
-      exact (mem_hittingSet_iff_optHittingSize_le hH).1 hm
-    · obtain ⟨H, hHm, hcard⟩ := exists_isHittingSet_optHittingSize hH
-      have hm : (S, optHittingSize (transposeSetSystem S)) ∈ SetCover :=
-        (transposeSetSystem_setCover_iff S _).1 (mem_hittingSet_iff.2 ⟨H, hHm, hcard.le⟩)
-      obtain ⟨C, hC, hCcard⟩ := mem_SetCover_iff.1 hm
-      exact (SetSystem.optCoverSize_le hC).trans hCcard
-  · have hH : ¬ Hittable (transposeSetSystem S) :=
-      mt (hittable_transposeSetSystem_iff_coverable S).1 hS
-    rw [SetSystem.optCoverSize_eq_zero_of_not_coverable hS]
-    simp [optHittingSize, hH]
+theorem hasRankAtMost_mono {d₁ d₂ : ℕ} (hd : d₁ ≤ d₂) {H : HypergraphInstance}
+    (h : H.HasRankAtMost d₁) : H.HasRankAtMost d₂ :=
+  fun e he => le_trans (h e he) hd
 
-/-- Approximation-preserving reduction from `minSetCover` to `minHittingSet` with identity ratio. -/
-theorem approxPreservingReducible_setCover_hittingSet :
-    ApproxPreservingReducible minSetCover minHittingSet
-      encSetSystem encSetSystem (encList encNat) (encList encNat) (fun _ ρ => ρ) := by
-  let liftSol (S : SetSystem) (L : List ℕ) : List ℕ :=
-    L.filter fun i => decide (i < S.sets.length)
-  have hlift_poly : ComputableInPolyTime (fun p : SetSystem × List ℕ => liftSol p.1 p.2)
-      (encPair encSetSystem (encList encNat)) (encList encNat) := by
-    refine filterWithInput (snd _ _) ?_
-    exact binary_lt' (snd _ _) (unary_to_binary.comp (by fun_prop))
-  refine ⟨transposeSetSystem, liftSol, computableInPolyTime_transposeSetSystem, hlift_poly,
-    fun S hS => (hittable_transposeSetSystem_iff_coverable S).2 hS,
-    fun S L _ hL => ?_, fun S ρ L _ _ hcost => ?_⟩
-  · obtain ⟨hLG, hLcov⟩ := (isHittingList_eq_true_iff (transposeSetSystem S) L).1 hL
-    refine (S.isCoverList_eq_true_iff (liftSol S L)).2 ⟨?_, ?_⟩
-    · intro i hi
-      exact decide_eq_true_iff.1 (List.mem_filter.1 hi).2
-    · intro u hu
-      have hAu : ((List.range S.sets.length).filter fun i => decide (u ∈ S.sets.getD i [])) ∈
-          (transposeSetSystem S).sets := List.mem_map_of_mem hu
-      obtain ⟨i, hiL, hiF⟩ := hLcov _ hAu
-      have hi_lt : i < S.sets.length := List.mem_range.1 (List.mem_filter.1 hiF).1
-      have hui : u ∈ S.sets[i]'hi_lt := by
-        have h1 := decide_eq_true_iff.1 (List.mem_filter.1 hiF).2
-        rwa [List.getD_eq_getElem _ _ hi_lt] at h1
-      exact ⟨i, List.mem_filter.2 ⟨List.mem_toFinset.1 hiL, decide_eq_true hi_lt⟩, hi_lt, hui⟩
-  · have hlen : (liftSol S L).length ≤ L.length := (List.filter_sublist).length_le
-    have hlen_real : ((liftSol S L).length : ℝ) ≤ L.length := by exact_mod_cast hlen
-    calc minSetCover.cost S (liftSol S L)
-        = ((liftSol S L).length : ℝ) := rfl
-      _ ≤ (L.length : ℝ) := hlen_real
-      _ ≤ ρ * minHittingSet.opt (transposeSetSystem S) := hcost
-      _ = ρ * minSetCover.opt S := by
-          simp [minHittingSet, minSetCover, optHittingSize_transposeSetSystem]
+/-- Minimum cardinality of a hitting set of `H` (`0` if `¬ H.Hittable`). -/
+noncomputable def optHittingSize (H : HypergraphInstance) : ℕ :=
+  sInf { n : ℕ | ∃ U : Finset ℕ, H.IsHittingSet U ∧ U.card = n }
 
-/-- `SetCover` reduces to `HittingSet` in polynomial time. -/
-theorem polyTimeReducible_setCover_hittingSet :
-    PolyTimeReducible encSetCover encHittingSet SetCover HittingSet :=
-  ⟨fun p => (transposeSetSystem p.1, p.2),
-    (computableInPolyTime_transposeSetSystem.comp (fst _ _)).prod (snd _ _),
-    fun ⟨S, k⟩ => (transposeSetSystem_setCover_iff S k).symm⟩
+theorem optHittingSize_le {H : HypergraphInstance} {U : Finset ℕ} (hU : H.IsHittingSet U) :
+    H.optHittingSize ≤ U.card :=
+  Nat.sInf_le ⟨U, hU, rfl⟩
 
-/-- `HittingSet` reduces to `SetCover` in polynomial time. -/
-theorem polyTimeReducible_hittingSet_setCover :
-    PolyTimeReducible encHittingSet encSetCover HittingSet SetCover :=
-  ⟨fun p => (transposeSetSystem p.1, p.2),
-    (computableInPolyTime_transposeSetSystem.comp (fst _ _)).prod (snd _ _),
-    fun ⟨S, k⟩ => (transposeSetSystem_hittingSet_iff S k).symm⟩
+theorem exists_isHittingSet_optHittingSize {H : HypergraphInstance} (hH : H.Hittable) :
+    ∃ U : Finset ℕ, H.IsHittingSet U ∧ U.card = H.optHittingSize := by
+  obtain ⟨U₀, hU₀⟩ := hH
+  exact Nat.sInf_mem (s := { n : ℕ | ∃ U : Finset ℕ, H.IsHittingSet U ∧ U.card = n })
+    ⟨U₀.card, U₀, hU₀, rfl⟩
 
-/-- `SetCover` FPT-reduces to `HittingSet` preserving `k`. -/
-theorem fptReducible_setCover_hittingSet :
-    FPTReducible encSetCover encHittingSet Prod.snd Prod.snd SetCover HittingSet :=
-  FPTReducible.of_computableInPolyTime
-    ((computableInPolyTime_transposeSetSystem.comp (fst _ _)).prod (snd _ _))
-    (h := id) (fun _ => le_rfl) fun ⟨S, k⟩ => (transposeSetSystem_setCover_iff S k).symm
+end HypergraphInstance
 
-/-- `HittingSet` FPT-reduces to `SetCover` preserving `k`. -/
-theorem fptReducible_hittingSet_setCover :
-    FPTReducible encHittingSet encSetCover Prod.snd Prod.snd HittingSet SetCover :=
-  FPTReducible.of_computableInPolyTime
-    ((computableInPolyTime_transposeSetSystem.comp (fst _ _)).prod (snd _ _))
-    (h := id) (fun _ => le_rfl) fun ⟨S, k⟩ => (transposeSetSystem_hittingSet_iff S k).symm
+/-! ### Decision Problems `HittingSet` and `DHittingSet` and Membership in `NP` -/
 
-/-- **`HittingSet` belongs to `NP`**. -/
-theorem hittingSet_mem_NP : HittingSet ∈ NP encHittingSet :=
-  polyTimeReducible_hittingSet_setCover.mem_NP SetCover_mem_NP
+/-- The `HittingSet` decision problem: pairs $(H, \alpha)$ where `H` contains a hitting set of
+size at most $\alpha$. -/
+@[expose] def HittingSet : Set HittingSetInstance :=
+  {x | ∃ U : Finset ℕ, x.hypergraph.IsHittingSet U ∧ U.card ≤ x.bound}
 
-/-- **`HittingSet` is `NP`-hard**. -/
-theorem hittingSet_npHard : NPHard encHittingSet HittingSet :=
-  (PromiseProblem.npHard_ofSet_iff.1
-    ((GapSetCover_npHard (c := 2) (by norm_num)).mono
-      (fun ⟨S, k⟩ h => by
-        obtain ⟨_, hopt⟩ := mem_yes_GapSetCoverFn.1 h
-        obtain ⟨C, hC, hcard⟩ := SetSystem.exists_isCover_optCoverSize
-          (mem_yes_GapSetCoverFn.1 h).1
-        exact mem_SetCover_iff.2 ⟨C, hC, hcard.le.trans hopt⟩)
-      (fun ⟨S, k⟩ h => by
-        obtain ⟨_, hopt, hlt⟩ := mem_no_GapSetCoverFn.1 h
-        intro hm
-        obtain ⟨C, hC, hcard⟩ := mem_SetCover_iff.1 hm
-        have hle := (SetSystem.optCoverSize_le hC).trans hcard
-        have hle' : (S.optCoverSize : ℝ) ≤ k := by exact_mod_cast hle
-        linarith))).trans polyTimeReducible_setCover_hittingSet
+/-- The $d$-`HittingSet` decision problem: instances $(H, \alpha) \in \mathrm{HittingSet}$ whose
+input hypergraph has rank at most `d`. -/
+@[expose] def DHittingSet (d : ℕ) : Set HittingSetInstance :=
+  {x | x ∈ HittingSet ∧ x.hypergraph.HasRankAtMost d}
+
+theorem mem_HittingSet_iff {x : HittingSetInstance} :
+    x ∈ HittingSet ↔ ∃ U : Finset ℕ, x.hypergraph.IsHittingSet U ∧ U.card ≤ x.bound :=
+  Iff.rfl
+
+theorem mem_DHittingSet_iff {d : ℕ} {x : HittingSetInstance} :
+    x ∈ DHittingSet d ↔
+      (∃ U : Finset ℕ, x.hypergraph.IsHittingSet U ∧ U.card ≤ x.bound) ∧
+        x.hypergraph.HasRankAtMost d :=
+  Iff.rfl
+
+/-- `HittingSet` belongs to `NP`. -/
+theorem HittingSet_mem_NP : HittingSet ∈ NP encHittingSet := by
+  let vs : HittingSetInstance → List ℕ := fun x => x.hypergraph.vertices
+  let check : HittingSetInstance × List ℕ → Bool := fun y =>
+    decide (y.2.length ≤ y.1.bound) && y.1.hypergraph.isHittingList y.2
+  have hvs : ComputableInPolyTime vs encHittingSet (encList encNat) := by
+    dsimp [vs]; fun_prop
+  have hcheck : ComputableInPolyTime check
+      (encPair encHittingSet (encList encNat)) encBool := by
+    have hlen : ComputableInPolyTime (fun y : HittingSetInstance × List ℕ => y.2.length)
+        (encPair encHittingSet (encList encNat)) encNat :=
+      unary_to_binary.comp ((length_list encNat).comp (snd encHittingSet (encList encNat)))
+    exact bool_and' (binary_le' hlen (by fun_prop)) (by fun_prop)
+  let P : HittingSetInstance → Finset ℕ → Prop := fun x U =>
+    x.hypergraph.IsHittingSet U ∧ U.card ≤ x.bound
+  have hP : ∀ (x : HittingSetInstance) (l : List ℕ), l.Nodup → (∀ v ∈ l, v ∈ vs x) →
+      (check (x, l) = true ↔ P x l.toFinset) := by
+    intro x l hnd _
+    simp [check, P, HypergraphInstance.isHittingList_eq_true_iff,
+      List.toFinset_card_of_nodup hnd, and_comm]
+  have hmem := mem_NP_of_subsetWitness (encγ := encNat) (P := P) hvs hcheck hP
+  have hEq : HittingSet = {x | ∃ U : Finset ℕ, (∀ v ∈ U, v ∈ vs x) ∧ P x U} := by
+    ext x
+    simp only [HittingSet, Set.mem_ofPred_eq, P, vs]
+    exact ⟨fun ⟨U, hU, hc⟩ => ⟨U, hU.1, hU, hc⟩, fun ⟨U, _, hU, hc⟩ => ⟨U, hU, hc⟩⟩
+  rwa [hEq]
+
+/-- `DHittingSet d` belongs to `NP` for every `d : ℕ`. -/
+theorem DHittingSet_mem_NP (d : ℕ) : DHittingSet d ∈ NP encHittingSet := by
+  let vs : HittingSetInstance → List ℕ := fun x => x.hypergraph.vertices
+  let check : HittingSetInstance × List ℕ → Bool := fun y =>
+    y.1.hypergraph.hasRankAtMostBool d &&
+      (decide (y.2.length ≤ y.1.bound) && y.1.hypergraph.isHittingList y.2)
+  have hvs : ComputableInPolyTime vs encHittingSet (encList encNat) := by
+    dsimp [vs]; fun_prop
+  have hcheck : ComputableInPolyTime check
+      (encPair encHittingSet (encList encNat)) encBool := by
+    have hlen : ComputableInPolyTime (fun y : HittingSetInstance × List ℕ => y.2.length)
+        (encPair encHittingSet (encList encNat)) encNat :=
+      unary_to_binary.comp ((length_list encNat).comp (snd encHittingSet (encList encNat)))
+    have hrk : ComputableInPolyTime
+        (fun y : HittingSetInstance × List ℕ => y.1.hypergraph.hasRankAtMostBool d)
+        (encPair encHittingSet (encList encNat)) encBool :=
+      (HypergraphInstance.computableInPolyTime_hasRankAtMostBool d).comp
+        (encHittingSet_hypergraph_polyTime (fst encHittingSet (encList encNat)))
+    exact bool_and' hrk (bool_and' (binary_le' hlen (by fun_prop)) (by fun_prop))
+  let P : HittingSetInstance → Finset ℕ → Prop := fun x U =>
+    x.hypergraph.HasRankAtMost d ∧ x.hypergraph.IsHittingSet U ∧ U.card ≤ x.bound
+  have hP : ∀ (x : HittingSetInstance) (l : List ℕ), l.Nodup → (∀ v ∈ l, v ∈ vs x) →
+      (check (x, l) = true ↔ P x l.toFinset) := by
+    intro x l hnd _
+    simp [check, P, HypergraphInstance.hasRankAtMostBool_eq_true_iff,
+      HypergraphInstance.isHittingList_eq_true_iff, List.toFinset_card_of_nodup hnd,
+      and_left_comm, and_comm]
+  have hmem := mem_NP_of_subsetWitness (encγ := encNat) (P := P) hvs hcheck hP
+  have hEq : DHittingSet d = {x | ∃ U : Finset ℕ, (∀ v ∈ U, v ∈ vs x) ∧ P x U} := by
+    ext x
+    simp only [DHittingSet, HittingSet, Set.mem_ofPred_eq, P, vs]
+    exact ⟨fun ⟨⟨U, hU, hc⟩, hrk⟩ => ⟨U, hU.1, hrk, hU, hc⟩,
+      fun ⟨U, _, hrk, hU, hc⟩ => ⟨⟨U, hU, hc⟩, hrk⟩⟩
+  rwa [hEq]
+
+/-! ### Reduction from `VertexCover` to `DHittingSet d` ($d \ge 2$) -/
+
+/-- Polynomial-time reduction mapping an undirected `VertexCoverInstance` to a rank-$\le 2$
+`HittingSetInstance`. -/
+def vertexCoverToHittingSet (x : VertexCoverInstance) : HittingSetInstance :=
+  if x.graph.distinctVertices.length < x.k then
+    ⟨⟨[], [[]]⟩, 0⟩
+  else
+    ⟨⟨x.graph.distinctVertices,
+      ((VertexCover.declaredEdges x.graph).filter fun e => decide (e.1 ≠ e.2)).map
+        fun e => [e.1, e.2]⟩,
+     x.k⟩
+
+@[fun_prop]
+theorem computableInPolyTime_vertexCoverToHittingSet :
+    ComputableInPolyTime vertexCoverToHittingSet encVertexCoverInstance encHittingSet := by
+  unfold vertexCoverToHittingSet
+  have hcond : ComputableInPolyTime
+      (fun x : VertexCoverInstance => decide (x.graph.distinctVertices.length < x.k))
+      encVertexCoverInstance encBool :=
+    binary_lt'
+      (unary_to_binary.comp ((length_list encNat).comp
+        (Graph.computableInPolyTime_distinctVertices.comp
+          (encVertexCoverInstance_graph_polyTime id'))))
+      (encVertexCoverInstance_k_polyTime id')
+  simpa only [decide_eq_true_eq] using
+    ComputableInPolyTime.ite hcond (const (⟨⟨[], [[]]⟩, 0⟩ : HittingSetInstance)) (by fun_prop)
+
+theorem vertexCoverToHittingSet_hasRankAtMost {d : ℕ} (hd : 2 ≤ d) (x : VertexCoverInstance) :
+    (vertexCoverToHittingSet x).hypergraph.HasRankAtMost d := by
+  unfold vertexCoverToHittingSet
+  split_ifs with hlt
+  · intro e he
+    simp only [List.mem_singleton] at he
+    subst he
+    simp [HypergraphInstance.cleanEdge, HypergraphInstance.distinctVertices]
+  · intro e he
+    simp only [List.mem_map, List.mem_filter, VertexCover.mem_declaredEdges,
+      decide_eq_true_eq] at he
+    obtain ⟨⟨u, v⟩, ⟨⟨_, _, _⟩, _⟩, rfl⟩ := he
+    rw [HypergraphInstance.length_cleanEdge_eq_card]
+    have hsub : ([u, v].filter (· ∈ x.graph.distinctVertices)).toFinset ⊆ {u, v} := by
+      intro w hw
+      simp only [List.mem_toFinset, List.mem_filter, List.mem_cons, List.not_mem_nil,
+        or_false] at hw
+      simpa using hw.1
+    exact le_trans (Finset.card_le_card hsub)
+      (le_trans (Finset.card_insert_le u {v}) (by simp; omega))
+
+theorem vertexCoverToHittingSet_mem_HittingSet_iff (x : VertexCoverInstance) :
+    vertexCoverToHittingSet x ∈ HittingSet ↔ x ∈ VertexCover := by
+  rw [mem_VertexCover_iff_exists_card_le, ← Graph.length_distinctVertices x.graph]
+  unfold vertexCoverToHittingSet
+  split_ifs with hlt
+  · simp only [not_le.mpr hlt, false_and, iff_false]
+    rintro ⟨U, hU, -⟩
+    obtain ⟨v, -, hv⟩ := hU.2 [] (List.mem_singleton.mpr rfl)
+    simp at hv
+  · push Not at hlt
+    simp only [hlt, true_and, mem_HittingSet_iff, HypergraphInstance.IsHittingSet]
+    refine ⟨fun ⟨U, ⟨hUV, hhit⟩, hcard⟩ => ⟨U, ?_, ?_, hcard⟩,
+      fun ⟨U, hUV, hcov, hcard⟩ => ⟨U, ⟨?_, ?_⟩, hcard⟩⟩
+    · intro v hv
+      exact Graph.mem_distinctVertices.mp (hUV v hv)
+    · intro u hu v hv hadj
+      rw [Graph.toSimpleGraph_adj] at hadj
+      obtain ⟨hne, he_or⟩ := hadj
+      rcases he_or with he | he
+      · have hmem : [u, v] ∈
+            ((VertexCover.declaredEdges x.graph).filter fun e => decide (e.1 ≠ e.2)).map
+              fun e => [e.1, e.2] := by
+          refine List.mem_map.mpr ⟨(u, v), List.mem_filter.mpr ⟨?_, decide_eq_true hne⟩, rfl⟩
+          exact VertexCover.mem_declaredEdges.mpr ⟨he, hu, hv⟩
+        obtain ⟨w, hwU, hw⟩ := hhit [u, v] hmem
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hw
+        rcases hw with rfl | rfl
+        · exact Or.inl hwU
+        · exact Or.inr hwU
+      · have hmem : [v, u] ∈
+            ((VertexCover.declaredEdges x.graph).filter fun e => decide (e.1 ≠ e.2)).map
+              fun e => [e.1, e.2] := by
+          refine List.mem_map.mpr ⟨(v, u), List.mem_filter.mpr ⟨?_, decide_eq_true hne.symm⟩, rfl⟩
+          exact VertexCover.mem_declaredEdges.mpr ⟨he, hv, hu⟩
+        obtain ⟨w, hwU, hw⟩ := hhit [v, u] hmem
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hw
+        rcases hw with rfl | rfl
+        · exact Or.inr hwU
+        · exact Or.inl hwU
+    · intro v hv
+      exact Graph.mem_distinctVertices.mpr (hUV v hv)
+    · intro e he
+      simp only [List.mem_map, List.mem_filter, VertexCover.mem_declaredEdges,
+        decide_eq_true_eq] at he
+      obtain ⟨⟨u, v⟩, ⟨⟨he_mem, hu, hv⟩, hne⟩, rfl⟩ := he
+      have hadj : x.graph.toSimpleGraph.Adj u v :=
+        Graph.toSimpleGraph_adj.mpr ⟨hne, Or.inl he_mem⟩
+      rcases hcov u hu v hv hadj with huU | hvU
+      · exact ⟨u, huU, by simp⟩
+      · exact ⟨v, hvU, by simp⟩
+
+theorem vertexCoverToHittingSet_mem_DHittingSet_iff {d : ℕ} (hd : 2 ≤ d)
+    (x : VertexCoverInstance) :
+    vertexCoverToHittingSet x ∈ DHittingSet d ↔ x ∈ VertexCover := by
+  change vertexCoverToHittingSet x ∈ HittingSet ∧ _ ↔ _
+  rw [vertexCoverToHittingSet_mem_HittingSet_iff]
+  exact and_iff_left (vertexCoverToHittingSet_hasRankAtMost hd x)
+
+/-- Polynomial-time many-one reduction from `VertexCover` to `DHittingSet d` for `d ≥ 2`. -/
+theorem polyTimeReducible_VertexCover_DHittingSet {d : ℕ} (hd : 2 ≤ d) :
+    PolyTimeReducible encVertexCoverInstance encHittingSet VertexCover (DHittingSet d) :=
+  ⟨vertexCoverToHittingSet, computableInPolyTime_vertexCoverToHittingSet,
+    fun x => (vertexCoverToHittingSet_mem_DHittingSet_iff hd x).symm⟩
+
+/-- `DHittingSet d` is `NP`-hard for every `d ≥ 2`. -/
+theorem DHittingSet_npHard {d : ℕ} (hd : 2 ≤ d) :
+    NPHard encHittingSet (DHittingSet d) :=
+  VertexCover_npHard.trans (polyTimeReducible_VertexCover_DHittingSet hd)
+
+/-- **`DHittingSet d` is `NP`-complete** for every `d ≥ 2`. -/
+theorem DHittingSet_npComplete {d : ℕ} (hd : 2 ≤ d) :
+    NPComplete encHittingSet (DHittingSet d) :=
+  ⟨DHittingSet_mem_NP d, DHittingSet_npHard hd⟩
+
+/-- `HittingSet` is `NP`-hard. -/
+theorem HittingSet_npHard : NPHard encHittingSet HittingSet :=
+  VertexCover_npHard.trans ⟨vertexCoverToHittingSet, computableInPolyTime_vertexCoverToHittingSet,
+    fun x => (vertexCoverToHittingSet_mem_HittingSet_iff x).symm⟩
 
 /-- **`HittingSet` is `NP`-complete**. -/
-theorem hittingSet_npComplete : NPComplete encHittingSet HittingSet :=
-  ⟨hittingSet_mem_NP, hittingSet_npHard⟩
+theorem HittingSet_npComplete : NPComplete encHittingSet HittingSet :=
+  ⟨HittingSet_mem_NP, HittingSet_npHard⟩
 
-/-- Unconditional constant-factor inapproximability of `minHittingSet`: any polynomial-time
-constant-factor `ρ`-approximation algorithm (`0 ≤ ρ`) for `minHittingSet` implies `P = NP`. -/
-theorem P_eq_NP_of_hittingSet_approx_const
-    {A : SetSystem → List ℕ} {ρ : ℝ} (hρ0 : 0 ≤ ρ)
-    (hA : ComputableInPolyTime A encSetSystem (encList encNat))
-    (happrox : minHittingSet.IsApprox (fun _ => ρ) A)
-    {α : Type} (enc : α ↪ List Bool) : P enc = NP enc := by
-  obtain ⟨A₁, hA₁, happrox₁⟩ :=
-    approxPreservingReducible_setCover_hittingSet.comp_isApprox hA happrox
-  have hr : 1 < max ρ 1 + 1 := by linarith [le_max_right ρ 1]
-  have hlt : ρ < max ρ 1 + 1 := by linarith [le_max_left ρ 1]
-  exact P_eq_NP_of_setCover_approx (GapSetCover_npHard hr) hρ0 hlt hA₁ happrox₁ enc
+/-! ### Minimization Variant `minHittingSet` and Exact Duality with `minSetCover` -/
 
-/-! ### 3. Closed-Neighborhood Reduction from `DominatingSet` to `SetCover` and `HittingSet` -/
+/-- Minimization problem `minHittingSet`. -/
+@[expose] noncomputable def minHittingSet : MinOptProblem HypergraphInstance (List ℕ) where
+  IsValid := HypergraphInstance.Hittable
+  Feasible H C := H.isHittingList C = true
+  cost _ C := (C.length : ℝ)
+  opt H := (H.optHittingSize : ℝ)
+  opt_le H C _ hC := by
+    have hhit := (H.isHittingList_eq_true_iff C).mp hC
+    exact_mod_cast (HypergraphInstance.optHittingSize_le hhit).trans (List.toFinset_card_le C)
+  exists_opt H hH := by
+    obtain ⟨U, hU, hcard⟩ := HypergraphInstance.exists_isHittingSet_optHittingSize hH
+    refine ⟨U.toList, ?_, ?_⟩
+    · rw [H.isHittingList_eq_true_iff, Finset.toList_toFinset]
+      exact hU
+    · simp [Finset.length_toList, hcard]
 
-/-- Closed-neighborhood `SetSystem` of an undirected graph `G`: ground set `G.vertices`, and one
-closed neighborhood `s :: G.vertices.filter (G.adjBool · s)` for each `s ∈ G.vertices`. -/
-@[expose] def dominatingSetToSetSystem (G : Graph) : SetSystem :=
-  ⟨G.vertices, G.vertices.map fun s => s :: G.vertices.filter fun v => G.adjBool v s⟩
+/-- Dual hypergraph of a `SetSystem`: candidate set indices `0, …, m - 1` become vertices and
+each ground element `u ∈ S.ground` induces the hyperedge of indices `i` with `u ∈ S.sets[i]`. -/
+def setSystemToHypergraph (S : SetSystem) : HypergraphInstance where
+  vertices := List.range S.sets.length
+  edges := S.ground.map fun u =>
+    (List.range S.sets.length).filter fun i => decide (u ∈ S.sets.getD i [])
 
-/-- Closed-neighborhood `HittingSet` system of `G`:
-`transposeSetSystem (dominatingSetToSetSystem G)`. -/
-@[expose] def dominatingSetToHittingSystem (G : Graph) : SetSystem :=
-  transposeSetSystem (dominatingSetToSetSystem G)
-
-/-- Polynomial-time certificate for `dominatingSetToSetSystem`. -/
 @[fun_prop]
-theorem computableInPolyTime_dominatingSetToSetSystem :
-    ComputableInPolyTime dominatingSetToSetSystem encGraph encSetSystem := by
-  have hsets : ComputableInPolyTime
-      (fun G : Graph => G.vertices.map fun s => s :: G.vertices.filter fun v => G.adjBool v s)
-      encGraph encNatSetList := by
-    refine mapWithInput (by fun_prop) ?_
-    have hs : ComputableInPolyTime (fun p : Graph × ℕ => p.2)
-        (encPair encGraph encNat) encNat := snd _ _
-    have hfilt : ComputableInPolyTime
-        (fun p : Graph × ℕ => p.1.vertices.filter fun v => p.1.adjBool v p.2)
-        (encPair encGraph encNat) (encList encNat) := by
-      refine filterWithInput (by fun_prop) ?_
-      fun_prop
-    exact cons' hs hfilt
-  unfold dominatingSetToSetSystem
-  exact computableInPolyTime_setSystemMk (by fun_prop) hsets
+theorem computableInPolyTime_setSystemToHypergraph :
+    ComputableInPolyTime setSystemToHypergraph encSetSystem encHypergraph := by
+  unfold setSystemToHypergraph
+  have hrange : ComputableInPolyTime (fun S : SetSystem => List.range S.sets.length)
+      encSetSystem (encList encNat) := by
+    simpa only [List.map_id', Function.comp_def] using
+      mapWithInput (f := fun _ i => i)
+        (range.comp ((length_list (encList encNat)).comp computableInPolyTime_setSystemSets))
+        (unary_to_binary.comp (snd _ _))
+  refine encHypergraph_mk_polyTime hrange ?_
+  refine mapWithInput computableInPolyTime_setSystemGround ?_
+  refine filterWithInput (hrange.comp (fst _ _)) ?_
+  have hget : ComputableInPolyTime
+      (fun q : (SetSystem × ℕ) × ℕ => q.1.1.sets.getD q.2 [])
+      (encPair (encPair encSetSystem encNat) encNat) (encList encNat) := by
+    have heq : (fun q : (SetSystem × ℕ) × ℕ => q.1.1.sets.getD q.2 []) =
+        fun q => q.1.1.sets.getD (min q.1.1.sets.length q.2) [] :=
+      funext fun q => by
+        rcases le_total q.1.1.sets.length q.2 with h | h <;> simp [h]
+    rw [heq]
+    have hsets : ComputableInPolyTime (fun q : (SetSystem × ℕ) × ℕ => q.1.1.sets)
+        (encPair (encPair encSetSystem encNat) encNat) (encList (encList encNat)) := by fun_prop
+    exact listGetDWithInput hsets (binary_min_unary' ((length_list _).comp hsets) (snd _ _)) []
+  have hmem : ComputableInPolyTime
+      (fun q : (SetSystem × ℕ) × ℕ => decide (q.1.2 ∈ q.1.1.sets.getD q.2 []))
+      (encPair (encPair encSetSystem encNat) encNat) encBool := by
+    have hin : ComputableInPolyTime (fun p : ℕ × List ℕ => decide (p.1 ∈ p.2))
+        (encPair encNat (encList encNat)) encBool := by fun_prop
+    exact hin.comp ((snd encSetSystem encNat |>.comp (fst _ _)).prod hget)
+  exact hmem
 
-/-- Polynomial-time certificate for `dominatingSetToHittingSystem`. -/
+theorem setSystemToHypergraph_isHittingList_iff (S : SetSystem) (I : List ℕ) :
+    (setSystemToHypergraph S).isHittingList I = true ↔ S.isCoverList I = true := by
+  rw [HypergraphInstance.isHittingList_eq_true_iff, SetSystem.isCoverList_eq_true_iff]
+  simp only [setSystemToHypergraph, HypergraphInstance.IsHittingSet, List.mem_toFinset,
+    List.mem_range, List.mem_map, forall_exists_index, and_imp, forall_apply_eq_imp_iff₂,
+    List.mem_filter, decide_eq_true_eq]
+  refine and_congr_right fun _ => forall₂_congr fun _ _ => ?_
+  constructor
+  · rintro ⟨i, hiI, hi, hui⟩
+    rw [List.getD_eq_getElem _ _ hi] at hui
+    exact ⟨i, hiI, hi, hui⟩
+  · rintro ⟨i, hiI, hi, hui⟩
+    exact ⟨i, hiI, hi, by rwa [List.getD_eq_getElem _ _ hi]⟩
+
+theorem setSystemToHypergraph_hittable_iff (S : SetSystem) :
+    (setSystemToHypergraph S).Hittable ↔ S.Coverable := by
+  constructor
+  · rintro ⟨U, hU⟩
+    have hlist : S.isCoverList U.toList = true := by
+      rw [← setSystemToHypergraph_isHittingList_iff,
+        HypergraphInstance.isHittingList_eq_true_iff, Finset.toList_toFinset]
+      exact hU
+    obtain ⟨_, hcov⟩ := (S.isCoverList_eq_true_iff _).mp hlist
+    refine ⟨Finset.univ.filter fun i : Fin S.sets.length => (i : ℕ) ∈ U, fun u hu => ?_⟩
+    obtain ⟨i, hiU, hi, hui⟩ := hcov u hu
+    rw [Finset.mem_toList] at hiU
+    exact ⟨⟨i, hi⟩, Finset.mem_filter.mpr ⟨Finset.mem_univ _, hiU⟩, hui⟩
+  · rintro ⟨C, hC⟩
+    let I := (C.image Fin.val).toList
+    have hcov : S.isCoverList I = true := by
+      rw [S.isCoverList_eq_true_iff]
+      refine ⟨fun i hi => ?_, fun u hu => ?_⟩
+      · rw [Finset.mem_toList] at hi
+        obtain ⟨j, -, rfl⟩ := Finset.mem_image.mp hi
+        exact j.isLt
+      · obtain ⟨j, hjC, huj⟩ := hC u hu
+        exact ⟨j.val, Finset.mem_toList.mpr (Finset.mem_image.mpr ⟨j, hjC, rfl⟩), j.isLt, huj⟩
+    exact ⟨I.toFinset, ((setSystemToHypergraph S).isHittingList_eq_true_iff I).mp
+      ((setSystemToHypergraph_isHittingList_iff S I).mpr hcov)⟩
+
+theorem setSystemToHypergraph_optHittingSize_eq (S : SetSystem)
+    (hS : S.Coverable) :
+    (setSystemToHypergraph S).optHittingSize = S.optCoverSize := by
+  have hH : (setSystemToHypergraph S).Hittable :=
+    (setSystemToHypergraph_hittable_iff S).mpr hS
+  apply le_antisymm
+  · obtain ⟨I, hfeas, hcost⟩ := minSetCover.exists_opt S hS
+    have hhit : (setSystemToHypergraph S).IsHittingSet I.toFinset :=
+      ((setSystemToHypergraph S).isHittingList_eq_true_iff I).mp
+        ((setSystemToHypergraph_isHittingList_iff S I).mpr hfeas)
+    have hle := HypergraphInstance.optHittingSize_le hhit
+    have hcard : I.toFinset.card ≤ S.optCoverSize := by
+      dsimp [minSetCover] at hcost
+      have hlen : I.length = S.optCoverSize := by exact_mod_cast hcost
+      exact (List.toFinset_card_le I).trans_eq hlen
+    exact le_trans hle hcard
+  · obtain ⟨C, hfeas, hcost⟩ := minHittingSet.exists_opt (setSystemToHypergraph S) hH
+    have hcov : S.isCoverList C = true :=
+      (setSystemToHypergraph_isHittingList_iff S C).mp hfeas
+    have hle : (S.optCoverSize : ℝ) ≤ (C.length : ℝ) := minSetCover.opt_le S C hS hcov
+    dsimp [minHittingSet] at hcost
+    rw [hcost] at hle
+    exact_mod_cast hle
+
+/-- **Exact approximation-preserving reduction from `minSetCover` to `minHittingSet`** with
+identity ratio transformation (`g = fun _ r => r`). -/
+theorem approxPreservingReducible_minSetCover_minHittingSet :
+    ApproxPreservingReducible minSetCover minHittingSet
+      encSetSystem encHypergraph (encList encNat) (encList encNat) (fun _ r => r) := by
+  refine ⟨setSystemToHypergraph, fun _ C => C, computableInPolyTime_setSystemToHypergraph,
+    snd _ _, fun S hS => (setSystemToHypergraph_hittable_iff S).mpr hS,
+    fun S C _ hC => (setSystemToHypergraph_isHittingList_iff S C).mp hC,
+    fun S r C hS _ hcost => ?_⟩
+  simpa [minSetCover, minHittingSet, setSystemToHypergraph_optHittingSize_eq S hS] using hcost
+
+/-- Dual `SetSystem` of a `HypergraphInstance`: hyperedge indices `0, …, m - 1` become the
+ground elements and each distinct declared vertex `v` induces the set of hyperedge indices
+containing `v`. -/
+def hypergraphToSetSystem (H : HypergraphInstance) : SetSystem where
+  ground := List.range H.edges.length
+  sets := H.distinctVertices.map fun v =>
+    (List.range H.edges.length).filter fun j => decide (v ∈ H.edges.getD j [])
+
 @[fun_prop]
-theorem computableInPolyTime_dominatingSetToHittingSystem :
-    ComputableInPolyTime dominatingSetToHittingSystem encGraph encSetSystem :=
-  computableInPolyTime_transposeSetSystem.comp computableInPolyTime_dominatingSetToSetSystem
+theorem computableInPolyTime_hypergraphToSetSystem :
+    ComputableInPolyTime hypergraphToSetSystem encHypergraph encSetSystem := by
+  unfold hypergraphToSetSystem
+  have hrange : ComputableInPolyTime (fun H : HypergraphInstance => List.range H.edges.length)
+      encHypergraph (encList encNat) := by
+    have hlen : ComputableInPolyTime (fun H : HypergraphInstance => H.edges.length)
+        encHypergraph encUnary :=
+      (length (encList encNat)).comp (encHypergraph_edges_polyTime id')
+    simpa only [List.map_id', Function.comp_def] using
+      mapWithInput (f := fun _ i => i) (range.comp hlen) (unary_to_binary.comp (snd _ _))
+  refine computableInPolyTime_setSystemMk hrange ?_
+  refine mapWithInput HypergraphInstance.computableInPolyTime_distinctVertices ?_
+  refine filterWithInput (hrange.comp (fst _ _)) ?_
+  have hget : ComputableInPolyTime
+      (fun q : (HypergraphInstance × ℕ) × ℕ => q.1.1.edges.getD q.2 [])
+      (encPair (encPair encHypergraph encNat) encNat) (encList encNat) := by
+    have heq : (fun q : (HypergraphInstance × ℕ) × ℕ => q.1.1.edges.getD q.2 []) =
+        fun q => q.1.1.edges.getD (min q.1.1.edges.length q.2) [] :=
+      funext fun q => by
+        rcases le_total q.1.1.edges.length q.2 with h | h <;> simp [h]
+    rw [heq]
+    have hedges : ComputableInPolyTime (fun q : (HypergraphInstance × ℕ) × ℕ => q.1.1.edges)
+        (encPair (encPair encHypergraph encNat) encNat) (encList (encList encNat)) := by fun_prop
+    exact listGetDWithInput hedges (binary_min_unary' ((length_list _).comp hedges) (snd _ _)) []
+  have hin : ComputableInPolyTime (fun p : ℕ × List ℕ => decide (p.1 ∈ p.2))
+      (encPair encNat (encList encNat)) encBool := by fun_prop
+  exact hin.comp ((snd encHypergraph encNat |>.comp (fst _ _)).prod hget)
 
-/-- `dominatingSetToSetSystem G` is always `Coverable`. -/
-theorem coverable_dominatingSetToSetSystem (G : Graph) :
-    (dominatingSetToSetSystem G).Coverable := by
-  refine ⟨Finset.univ, fun v hv => ?_⟩
-  obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.1 hv
-  have hi' : i < (dominatingSetToSetSystem G).sets.length := by
-    simpa [dominatingSetToSetSystem] using hi
-  refine ⟨⟨i, hi'⟩, Finset.mem_univ _, ?_⟩
-  simp [dominatingSetToSetSystem]
+/-- Map selected set indices `I` of `hypergraphToSetSystem H` back to vertex identifiers in
+`H.distinctVertices`. -/
+def liftSetCoverToHittingSet (H : HypergraphInstance) (I : List ℕ) : List ℕ :=
+  I.map fun i => H.distinctVertices.getD i (H.vertices.headD 0)
 
-/-- `dominatingSetToHittingSystem G` is always `Hittable`. -/
-theorem hittable_dominatingSetToHittingSystem (G : Graph) :
-    Hittable (dominatingSetToHittingSystem G) :=
-  (hittable_transposeSetSystem_iff_coverable _).2 (coverable_dominatingSetToSetSystem G)
-
-/-- `(dominatingSetToSetSystem G, k) ∈ SetCover` if and only if `G` admits a dominating set of at
-most `k` declared vertices. -/
-theorem dominatingSetToSetSystem_mem_setCover_iff (G : Graph) (k : ℕ) :
-    (dominatingSetToSetSystem G, k) ∈ SetCover ↔
-      ∃ D : Finset ℕ, (∀ v ∈ D, v ∈ G.vertices) ∧
-        (∀ v ∈ G.vertices, v ∈ D ∨ ∃ s ∈ D, G.toSimpleGraph.Adj v s) ∧ D.card ≤ k := by
-  classical
-  rw [mem_SetCover_iff]
-  have hlen : (dominatingSetToSetSystem G).sets.length = G.vertices.length := by
-    simp [dominatingSetToSetSystem]
+theorem hypergraphToSetSystem_coverable_iff (H : HypergraphInstance) :
+    (hypergraphToSetSystem H).Coverable ↔ H.Hittable := by
+  rw [← SetSystem.coverableBool_eq_true_iff, ← HypergraphInstance.hittableBool_eq_true_iff]
+  simp only [SetSystem.coverableBool, hypergraphToSetSystem, HypergraphInstance.hittableBool,
+    List.all_eq_true, List.any_eq_true, List.mem_range, List.mem_map, exists_exists_and_eq_and,
+    List.mem_filter, decide_eq_true_eq, HypergraphInstance.mem_distinctVertices]
   constructor
-  · rintro ⟨C, hC, hcard⟩
-    let D : Finset ℕ := C.image fun i => G.vertices[i.1]'(i.isLt.trans_eq hlen)
-    refine ⟨D, ?_, ?_, Finset.card_image_le.trans hcard⟩
-    · intro v hv
-      obtain ⟨i, _, rfl⟩ := Finset.mem_image.1 hv
-      exact List.getElem_mem _
-    · intro v hv
-      obtain ⟨i, hiC, hvi⟩ := hC v hv
-      have hi_lt : i.1 < G.vertices.length := i.isLt.trans_eq hlen
-      have hset : (dominatingSetToSetSystem G).sets[i] =
-          (G.vertices[i.1]'hi_lt) ::
-            G.vertices.filter (fun u => G.adjBool u (G.vertices[i.1]'hi_lt)) := by
-        rw [Fin.getElem_fin]
-        simp [dominatingSetToSetSystem]
-      rw [hset, List.mem_cons] at hvi
-      rcases hvi with rfl | hfilt
-      · exact Or.inl (Finset.mem_image_of_mem _ hiC)
-      · have hadj := (G.adjBool_eq_true_iff _ _).1 (List.mem_filter.1 hfilt).2
-        exact Or.inr ⟨G.vertices[i.1]'hi_lt, Finset.mem_image_of_mem _ hiC, hadj⟩
-  · rintro ⟨D, hDV, hDdom, hcard⟩
-    have hidx_lt (s : ℕ) (hs : s ∈ D) :
-        G.vertices.idxOf s < (dominatingSetToSetSystem G).sets.length :=
-      hlen ▸ List.idxOf_lt_length_of_mem (hDV s hs)
-    let C : Finset (Fin (dominatingSetToSetSystem G).sets.length) :=
-      D.attach.image fun s => ⟨G.vertices.idxOf s.1, hidx_lt s.1 s.2⟩
-    refine ⟨C, ?_, (Finset.card_image_le.trans (by simp)).trans hcard⟩
-    intro v hv
-    rcases hDdom v hv with hvD | ⟨s, hsD, hadj⟩
-    · have hv_lt : G.vertices.idxOf v < G.vertices.length := List.idxOf_lt_length_of_mem hv
-      refine ⟨⟨G.vertices.idxOf v, hidx_lt v hvD⟩,
-        Finset.mem_image_of_mem _ (Finset.mem_attach _ ⟨v, hvD⟩), ?_⟩
-      simp [dominatingSetToSetSystem, List.getElem_idxOf hv_lt]
-    · have hs_lt : G.vertices.idxOf s < G.vertices.length :=
-        List.idxOf_lt_length_of_mem (hDV s hsD)
-      refine ⟨⟨G.vertices.idxOf s, hidx_lt s hsD⟩,
-        Finset.mem_image_of_mem _ (Finset.mem_attach _ ⟨s, hsD⟩), ?_⟩
-      simp only [dominatingSetToSetSystem, Fin.getElem_fin, List.getElem_map,
-        List.getElem_idxOf hs_lt, List.mem_cons, List.mem_filter, Graph.adjBool_eq_true_iff]
-      exact Or.inr ⟨hv, hadj⟩
+  · intro h e he
+    obtain ⟨j, hj, rfl⟩ := List.mem_iff_getElem.mp he
+    obtain ⟨v, hvV, _, hvj⟩ := h j hj
+    rw [List.getD_eq_getElem _ _ hj] at hvj
+    exact ⟨v, hvV, hvj⟩
+  · intro h j hj
+    obtain ⟨v, hvV, hvj⟩ := h H.edges[j] (List.getElem_mem hj)
+    refine ⟨v, hvV, hj, ?_⟩
+    rwa [List.getD_eq_getElem _ _ hj]
 
-/-- `(dominatingSetToHittingSystem G, k) ∈ HittingSet` if and only if `G` admits a dominating set
-of at most `k` declared vertices. -/
-theorem dominatingSetToHittingSystem_mem_iff (G : Graph) (k : ℕ) :
-    (dominatingSetToHittingSystem G, k) ∈ HittingSet ↔
-      ∃ D : Finset ℕ, (∀ v ∈ D, v ∈ G.vertices) ∧
-        (∀ v ∈ G.vertices, v ∈ D ∨ ∃ s ∈ D, G.toSimpleGraph.Adj v s) ∧ D.card ≤ k := by
-  rw [dominatingSetToHittingSystem, transposeSetSystem_setCover_iff,
-    dominatingSetToSetSystem_mem_setCover_iff]
+theorem liftSetCoverToHittingSet_isHittingList {H : HypergraphInstance} {I : List ℕ}
+    (hcov : (hypergraphToSetSystem H).isCoverList I = true) :
+    H.isHittingList (liftSetCoverToHittingSet H I) = true := by
+  obtain ⟨hbound, hground⟩ := ((hypergraphToSetSystem H).isCoverList_eq_true_iff I).mp hcov
+  rw [HypergraphInstance.isHittingList_eq_true_iff]
+  have hbound' : ∀ i ∈ I, i < H.distinctVertices.length := by
+    intro i hi
+    simpa [hypergraphToSetSystem] using hbound i hi
+  refine ⟨fun v hv => ?_, fun e he => ?_⟩
+  · rw [List.mem_toFinset, liftSetCoverToHittingSet, List.mem_map] at hv
+    obtain ⟨i, hiI, rfl⟩ := hv
+    rw [List.getD_eq_getElem _ _ (hbound' i hiI)]
+    exact HypergraphInstance.mem_distinctVertices.mp (List.getElem_mem (hbound' i hiI))
+  · obtain ⟨j, hj, rfl⟩ := List.mem_iff_getElem.mp he
+    obtain ⟨i, hiI, _, hjmem⟩ := hground j (List.mem_range.mpr hj)
+    have hi' : i < H.distinctVertices.length := hbound' i hiI
+    simp only [hypergraphToSetSystem, List.getElem_map, List.mem_filter, List.mem_range,
+      decide_eq_true_eq] at hjmem
+    rw [List.getD_eq_getElem _ _ hj] at hjmem
+    refine ⟨H.distinctVertices[i]'hi', ?_, hjmem.2⟩
+    rw [List.mem_toFinset, liftSetCoverToHittingSet, List.mem_map]
+    exact ⟨i, hiI, List.getD_eq_getElem _ _ hi'⟩
 
-/-! ### 4. Membership of `HittingSet` and `SetCover` in `W[2]` -/
+/-- Greedy hitting-set algorithm via `SetSystem.greedyIndices` on `hypergraphToSetSystem H`,
+achieving approximation ratio $1 + \ln |E(H)|$ on every hittable hypergraph. -/
+noncomputable def greedyHittingSet (H : HypergraphInstance) : List ℕ :=
+  liftSetCoverToHittingSet H ((hypergraphToSetSystem H).greedyIndices.map Fin.val)
 
-private def hsDistinctGround (S : SetSystem) : List ℕ :=
-  selectDistinct S.ground (List.replicate S.ground.length true)
-
-private lemma mem_hsDistinctGround_iff {S : SetSystem} {u : ℕ} :
-    u ∈ hsDistinctGround S ↔ u ∈ S.ground :=
-  mem_selectDistinct_replicate
-
-private lemma nodup_hsDistinctGround (S : SetSystem) : (hsDistinctGround S).Nodup :=
-  nodup_selectDistinct _ _
-
-private def hsOrArgLists (S : SetSystem) : List (List ℕ) :=
-  let U := hsDistinctGround S
-  S.sets.map fun A => (List.range U.length).filter fun i => decide (U.getD i 0 ∈ A)
-
-private def hsCircuitGates (nInputs : ℕ) (orArgs : List (List ℕ)) :
-    List (Unbounded.Op × List ℕ) :=
-  (orArgs.map fun l => (Unbounded.Op.or l.length, l)) ++
-    [(Unbounded.Op.and orArgs.length, (List.range orArgs.length).map (nInputs + ·))]
-
-private def hsCircuitCode (S : SetSystem) (k : ℕ) :
-    List (Unbounded.Op × List ℕ) × List ℕ :=
-  let U := hsDistinctGround S
-  let pad := min k U.length
-  let nInputs := U.length + pad
-  let orArgs := hsOrArgLists S
-  (hsCircuitGates nInputs orArgs, [nInputs + orArgs.length])
-
-private lemma lt_of_mem_hsOrArgLists {S : SetSystem} {l : List ℕ} (hl : l ∈ hsOrArgLists S) :
-    ∀ i ∈ l, i < (hsDistinctGround S).length := by
-  obtain ⟨A, _, rfl⟩ := List.mem_map.1 hl
-  intro i hi
-  exact List.mem_range.1 (List.mem_filter.1 hi).1
-
-private lemma isCodeFrom_hsCircuitGates {nInputs : ℕ} {orArgs : List (List ℕ)}
-    (hor : ∀ l ∈ orArgs, ∀ i ∈ l, i < nInputs) :
-    Program.IsCodeFrom Unbounded.signature nInputs 0 (hsCircuitGates nInputs orArgs) := by
-  rw [hsCircuitGates, Program.isCodeFrom_append]
-  refine ⟨Program.isCodeFrom_of_forall (List.forall_mem_map.2 fun l hl =>
-      ⟨rfl, fun i hi => (hor l hl i hi).trans_le (Nat.le_add_right _ _)⟩),
-    Program.isCodeFrom_of_forall (List.forall_mem_singleton.2 ⟨by simp,
-      List.forall_mem_map.2 fun j hj => ?_⟩)⟩
-  simp only [List.mem_range, List.length_map] at hj ⊢
-  omega
-
-private lemma isSome_ofCode_hsCircuitCode (S : SetSystem) (k : ℕ) :
-    (Circuit.ofCode ((hsDistinctGround S).length + min k (hsDistinctGround S).length) 1
-      (hsCircuitCode S k) :
-      Option (Circuit Unbounded.signature _ 1)).isSome := by
-  rw [Circuit.isSome_ofCode_iff]
-  refine ⟨isCodeFrom_hsCircuitGates fun l hl i hi =>
-      (lt_of_mem_hsOrArgLists hl i hi).trans_le (Nat.le_add_right _ _), rfl, ?_⟩
-  simp only [hsCircuitCode, hsCircuitGates, List.mem_singleton, forall_eq, List.length_append,
-    List.length_map, List.length_singleton]
-  omega
-
-private def hsToCircuit (S : SetSystem) (k : ℕ) : Σ n, Circuit Unbounded.signature n 1 :=
-  ⟨(hsDistinctGround S).length + min k (hsDistinctGround S).length,
-    (Circuit.ofCode _ 1 (hsCircuitCode S k)).get (isSome_ofCode_hsCircuitCode S k)⟩
-
-private lemma code_hsToCircuit (S : SetSystem) (k : ℕ) :
-    (hsToCircuit S k).2.code = hsCircuitCode S k :=
-  Circuit.code_of_ofCode_eq_some (Option.some_get _).symm
-
-private lemma depth_hsToCircuit_le (S : SetSystem) (k : ℕ) :
-    (hsToCircuit S k).2.depth ≤ 2 := by
-  rw [← Circuit.depthWith_one]
-  refine Circuit.depthWith_le_of_evalCode _ _ fun v hv => ?_
-  rw [code_hsToCircuit] at hv
-  dsimp only [hsCircuitCode] at hv
-  rw [hsCircuitGates] at hv
-  have hlayer : ∀ w ∈ evalCode (depthInterpretation (σ := Unbounded.signature) 1) 0
-      (List.replicate ((hsDistinctGround S).length + min k (hsDistinctGround S).length) 0)
-      (((hsOrArgLists S).map fun l => (Unbounded.Op.or l.length, l)) ++
-        [(Unbounded.Op.and (hsOrArgLists S).length,
-          (List.range (hsOrArgLists S).length).map
-            (((hsDistinctGround S).length + min k (hsDistinctGround S).length) + ·))]),
-      w ≤ 0 + 1 + 1 := by
-    rw [evalCode_append]
-    refine le_of_mem_evalCode_depth_layer _ _ _
-      (List.forall_mem_singleton.2 (List.forall_mem_map.2 fun j hj => ?_))
-      (le_of_mem_evalCode_depth_layer _ _ _
-        (List.forall_mem_map.2 fun l hl i hi => ?_)
-        (fun _ hw => (List.eq_of_mem_replicate hw).le)
-        (List.forall_mem_map.2 fun _ _ => le_rfl))
-      (by simp)
-    · simp only [List.mem_range, length_evalCode, List.length_replicate, List.length_map] at hj ⊢
-      omega
-    · have hlt := lt_of_mem_hsOrArgLists hl i hi
-      simp only [List.length_replicate]
-      omega
-  exact hlayer v hv
-
-private lemma weft_hsToCircuit_le (S : SetSystem) (k : ℕ) :
-    (hsToCircuit S k).2.weft ≤ 2 :=
-  (hsToCircuit S k).2.weft_le_depth.trans (depth_hsToCircuit_le S k)
-
-private lemma evalCode_hsCircuitGates {nInputs : ℕ} {orArgs : List (List ℕ)}
-    (hor : ∀ l ∈ orArgs, ∀ i ∈ l, i < nInputs) (x : List Bool) (hx : x.length = nInputs) :
-    (evalCode Unbounded.interpretation false x (hsCircuitGates nInputs orArgs)).getD
-        (nInputs + orArgs.length) false =
-      decide (∀ l ∈ orArgs, ∃ i ∈ l, x.getD i false = true) := by
-  subst hx
-  rw [hsCircuitGates, evalCode_append]
-  have h1 : evalCode Unbounded.interpretation false x
-      (orArgs.map fun l => (Unbounded.Op.or l.length, l)) =
-      x ++ orArgs.map fun l => decide (∃ i ∈ l, x.getD i false = true) := by
-    rw [evalCode_layer]
-    · simp only [List.map_map]
-      congr 1
-      refine List.map_congr_left fun l _ => ?_
-      simp only [Function.comp_apply, Unbounded.interpretation]
-      rw [decide_eq_decide]
-      constructor
-      · rintro ⟨a, ha⟩
-        have ha_lt : a.val < l.length := a.isLt
-        rw [List.getElem?_eq_getElem ha_lt, Option.elim_some] at ha
-        exact ⟨l[a.val]'ha_lt, List.getElem_mem ha_lt, ha⟩
-      · rintro ⟨i, hil, hxi⟩
-        obtain ⟨idx, hidx_lt, rfl⟩ := List.mem_iff_getElem.1 hil
-        refine ⟨⟨idx, hidx_lt⟩, ?_⟩
-        rw [List.getElem?_eq_getElem hidx_lt, Option.elim_some]
-        exact hxi
-    · exact List.forall_mem_map.2 fun l hl i hi => hor l hl i hi
-  rw [h1, evalCode_layer]
-  · have hlen : (x ++ orArgs.map fun l => decide (∃ i ∈ l, x.getD i false = true)).length =
-        x.length + orArgs.length := by simp
-    rw [← hlen, List.getD_append_right _ _ _ _ le_rfl, Nat.sub_self]
-    simp only [List.map_singleton, List.getD_cons_zero, Unbounded.interpretation_and]
-    rw [decide_eq_decide, List.forall_mem_iff_getElem, Fin.forall_iff]
-    refine forall_congr' fun j => forall_congr' fun hj => ?_
-    rw [List.getElem?_eq_getElem (by simpa using hj)]
-    simp only [Option.elim_some, List.getElem_map, List.getElem_range]
-    rw [List.getD_append_right _ _ _ _ (Nat.le_add_right _ _), Nat.add_sub_cancel_left,
-      List.getD_eq_getElem _ _ (by simpa using hj), List.getElem_map, decide_eq_true_eq]
-  · refine List.forall_mem_singleton.2 (List.forall_mem_map.2 fun j hj => ?_)
-    simp only [List.mem_range, List.length_append, List.length_map] at hj ⊢
-    omega
-
-private lemma hsToCircuit_satisfiableWithWeight_iff {S : SetSystem} {k : ℕ}
-    (hk : k ≤ (hsDistinctGround S).length) :
-    (hsToCircuit S k).2.SatisfiableWithWeight Unbounded.interpretation k ↔
-      (S, k) ∈ HittingSet := by
-  classical
-  set U := hsDistinctGround S with hU_def
-  have hpad : min k U.length = k := Nat.min_eq_left hk
-  have hfst : (hsToCircuit S k).1 = U.length + min k U.length := rfl
-  have hout : ((hsToCircuit S k).2.outputs 0).toNat =
-      U.length + min k U.length + (hsOrArgLists S).length :=
-    congrArg (fun c => c.2.headD 0) (code_hsToCircuit S k)
-  have heval (x : BitString (hsToCircuit S k).1) :
-      (hsToCircuit S k).2.eval Unbounded.interpretation x 0 =
-        decide (∀ l ∈ hsOrArgLists S, ∃ i ∈ l, (List.ofFn x).getD i false = true) := by
-    rw [Circuit.eval_eq_getD _ _ false, hout, code_hsToCircuit]
-    exact evalCode_hsCircuitGates
-      (fun l hl i hi => (lt_of_mem_hsOrArgLists hl i hi).trans_le (Nat.le_add_right _ _))
-      (List.ofFn x) (by simp [hfst, ← hU_def])
-  simp only [Circuit.SatisfiableWithWeight, heval, decide_eq_true_eq, mem_hittingSet_iff]
-  constructor
-  · rintro ⟨x, hwt, hx⟩
-    let H : Finset ℕ :=
-      ((Finset.univ.filter fun i : Fin (hsToCircuit S k).1 =>
-        i.1 < U.length ∧ x i = true).image fun i => U.getD i.1 0)
-    have hHcard : H.card ≤ k := by
-      refine (Finset.card_image_le.trans ?_).trans hwt.le
-      rw [BitString.weight]
-      exact Finset.card_le_card fun i hi =>
-        Finset.mem_filter.2 ⟨Finset.mem_univ _, (Finset.mem_filter.1 hi).2.2⟩
-    refine ⟨H, ⟨?_, ?_⟩, hHcard⟩
-    · intro u hu
-      obtain ⟨i, hi, rfl⟩ := Finset.mem_image.1 hu
-      have hi_lt : i.1 < U.length := (Finset.mem_filter.1 hi).2.1
-      rw [List.getD_eq_getElem _ _ hi_lt]
-      exact mem_hsDistinctGround_iff.1 (List.getElem_mem hi_lt)
-    · intro A hA
-      have hl : ((List.range U.length).filter fun i => decide (U.getD i 0 ∈ A)) ∈
-          hsOrArgLists S := List.mem_map_of_mem hA
-      obtain ⟨i, hil, hxi⟩ := hx _ hl
-      have hi_lt : i < U.length := List.mem_range.1 (List.mem_filter.1 hil).1
-      have huA : U.getD i 0 ∈ A := decide_eq_true_iff.1 (List.mem_filter.1 hil).2
-      have hi_tot : i < (hsToCircuit S k).1 := by rw [hfst]; omega
-      have hxi' : x ⟨i, hi_tot⟩ = true := by
-        rw [List.getD_eq_getElem _ _ (by simp [hi_tot]), List.getElem_ofFn] at hxi
-        exact hxi
-      exact ⟨U.getD i 0, Finset.mem_image.2
-        ⟨⟨i, hi_tot⟩, Finset.mem_filter.2 ⟨Finset.mem_univ _, hi_lt, hxi'⟩, rfl⟩, huA⟩
-  · rintro ⟨H, ⟨hHG, hHcov⟩, hcard⟩
-    let H_idx : Finset ℕ := H.image U.idxOf
-    have hH_idx_lt : ∀ i ∈ H_idx, i < U.length := by
-      intro i hi
-      obtain ⟨u, hu, rfl⟩ := Finset.mem_image.1 hi
-      exact List.idxOf_lt_length_of_mem (mem_hsDistinctGround_iff.2 (hHG u hu))
-    have hH_idx_card : H_idx.card ≤ k := Finset.card_image_le.trans hcard
-    let padCount := k - H_idx.card
-    let x : BitString (hsToCircuit S k).1 := fun i =>
-      if i.1 < U.length then decide (i.1 ∈ H_idx)
-      else decide (i.1 < U.length + padCount)
-    refine ⟨x, ?_, ?_⟩
-    · have hpart : (Finset.univ.filter fun i : Fin (hsToCircuit S k).1 =>
-          x i = true).image Fin.val =
-          H_idx ∪ ((Finset.range padCount).image (U.length + ·)) := by
-        ext j
-        simp only [Finset.mem_image, Finset.mem_filter, Finset.mem_univ, true_and,
-          Finset.mem_union, Finset.mem_range, x]
-        constructor
-        · rintro ⟨i, hi, rfl⟩
-          split_ifs at hi with hlt
-          · exact Or.inl (decide_eq_true_iff.1 hi)
-          · exact Or.inr ⟨i.1 - U.length, by have := decide_eq_true_iff.1 hi; omega, by omega⟩
-        · rintro (hjH | ⟨r, hr, rfl⟩)
-          · have hj_lt := hH_idx_lt j hjH
-            have hj_tot : j < (hsToCircuit S k).1 := by rw [hfst]; omega
-            exact ⟨⟨j, hj_tot⟩, by simp [hj_lt, hjH], rfl⟩
-          · have hj_tot : U.length + r < (hsToCircuit S k).1 := by rw [hfst, hpad]; omega
-            exact ⟨⟨U.length + r, hj_tot⟩, by simp; omega, rfl⟩
-      have hdisj : Disjoint H_idx ((Finset.range padCount).image (U.length + ·)) := by
-        refine Finset.disjoint_left.2 fun j hjH hjR => ?_
-        obtain ⟨r, _, rfl⟩ := Finset.mem_image.1 hjR
-        have := hH_idx_lt _ hjH
-        omega
-      rw [BitString.weight, ← Finset.card_image_of_injective _ Fin.val_injective, hpart,
-        Finset.card_union_of_disjoint hdisj,
-        Finset.card_image_of_injective (Finset.range padCount)
-          (fun a b (h : U.length + a = U.length + b) => by omega), Finset.card_range]
-      omega
-    · intro l hl
-      obtain ⟨A, hA, rfl⟩ := List.mem_map.1 hl
-      obtain ⟨u, huH, huA⟩ := hHcov A hA
-      have huU : u ∈ U := mem_hsDistinctGround_iff.2 (hHG u huH)
-      let i := U.idxOf u
-      have hi_lt : i < U.length := List.idxOf_lt_length_of_mem huU
-      have hi_tot : i < (hsToCircuit S k).1 := by rw [hfst]; omega
-      refine ⟨i, List.mem_filter.2 ⟨List.mem_range.2 hi_lt, decide_eq_true ?_⟩, ?_⟩
-      · rw [List.getD_eq_getElem _ _ hi_lt, List.getElem_idxOf hi_lt]
-        exact huA
-      · rw [List.getD_eq_getElem _ _ (by simp [hi_tot]), List.getElem_ofFn]
-        simp only [x, hi_lt, ↓reduceIte, decide_eq_true_eq]
-        exact Finset.mem_image_of_mem _ huH
-
-private def hsYesInstance : WCSInstance 2 2 :=
-  ⟨⟨WCS.trueCircuit, by decide, by decide⟩, 0⟩
-
-private def hsNoInstance : WCSInstance 2 2 :=
-  ⟨⟨WCS.falseCircuit, by decide, by decide⟩, 0⟩
-
-private def hittingSetToWCS (p : SetSystem × ℕ) : WCSInstance 2 2 :=
-  if decide (p.2 ≤ (hsDistinctGround p.1).length) then
-    ⟨⟨hsToCircuit p.1 p.2, weft_hsToCircuit_le p.1 p.2, depth_hsToCircuit_le p.1 p.2⟩, p.2⟩
-  else if hittableBool p.1 then
-    hsYesInstance
-  else
-    hsNoInstance
-
-private lemma hittingSetToWCS_mem_iff (p : SetSystem × ℕ) :
-    hittingSetToWCS p ∈ WCS 2 2 ↔ p ∈ HittingSet := by
-  obtain ⟨S, k⟩ := p
-  unfold hittingSetToWCS
-  dsimp only
-  by_cases hk : k ≤ (hsDistinctGround S).length
-  · simp only [hk, decide_true, ↓reduceIte, mem_WCS]
-    exact hsToCircuit_satisfiableWithWeight_iff hk
-  · simp only [hk, decide_false, Bool.false_eq_true, ↓reduceIte]
-    have hk_gt : (hsDistinctGround S).length < k := Nat.lt_of_not_le hk
-    by_cases hhit : hittableBool S = true
-    · simp only [hhit, ↓reduceIte, hsYesInstance, mem_WCS]
-      have hyes : WCS.trueCircuit.2.SatisfiableWithWeight Unbounded.interpretation 0 :=
-        ⟨fun _ => false, Nat.eq_zero_of_le_zero (BitString.weight_le_length _), rfl⟩
-      refine ⟨fun _ => ?_, fun _ => hyes⟩
-      obtain ⟨H, hH⟩ := (hittableBool_eq_true_iff S).1 hhit
-      let H' : Finset ℕ := (hsDistinctGround S).toFinset
-      refine mem_hittingSet_iff.2 ⟨H', ⟨fun u hu =>
-        mem_hsDistinctGround_iff.1 (List.mem_toFinset.1 hu), ?_⟩,
-        (hsDistinctGround S).toFinset_card_le.trans hk_gt.le⟩
-      intro A hA
-      obtain ⟨u, huH, huA⟩ := hH.2 A hA
-      exact ⟨u, List.mem_toFinset.2 (mem_hsDistinctGround_iff.2 (hH.1 u huH)), huA⟩
-    · simp only [hhit, Bool.false_eq_true, ↓reduceIte, hsNoInstance, mem_WCS]
-      have hno : ¬ WCS.falseCircuit.2.SatisfiableWithWeight Unbounded.interpretation 0 :=
-        fun ⟨_, _, hx⟩ => Bool.false_ne_true hx
-      refine ⟨fun h => absurd h hno, fun hm => ?_⟩
-      obtain ⟨H, hH, _⟩ := mem_hittingSet_iff.1 hm
-      exact absurd ((hittableBool_eq_true_iff S).2 ⟨H, hH⟩) hhit
-
-private lemma computableInPolyTime_hittingSetToWCS :
-    ComputableInPolyTime hittingSetToWCS encHittingSet (encWCS 2 2) := by
-  have hU : ComputableInPolyTime (fun p : SetSystem × ℕ => hsDistinctGround p.1)
-      encHittingSet (encList encNat) := by
-    have hg : ComputableInPolyTime (fun p : SetSystem × ℕ => p.1.ground)
-        encHittingSet (encList encNat) := by fun_prop
-    unfold hsDistinctGround
-    exact (computableInPolyTime_selectDistinct encNat).comp
-      (hg.prod ((bitsReplicate true).comp ((length_list encNat).comp hg)))
-  have hUlen : ComputableInPolyTime (fun p : SetSystem × ℕ => (hsDistinctGround p.1).length)
-      encHittingSet encUnary := (length_list encNat).comp hU
-  have hpad : ComputableInPolyTime
-      (fun p : SetSystem × ℕ => min p.2 (hsDistinctGround p.1).length)
-      encHittingSet encUnary := by
-    simpa only [Nat.min_comm] using binary_min_unary' hUlen (snd _ _)
-  have hnIn : ComputableInPolyTime
-      (fun p : SetSystem × ℕ =>
-        (hsDistinctGround p.1).length + min p.2 (hsDistinctGround p.1).length)
-      encHittingSet encUnary :=
-    unary_add' hUlen hpad
-  have hrU : ComputableInPolyTime
-      (fun p : SetSystem × ℕ => List.range (hsDistinctGround p.1).length)
-      encHittingSet (encList encNat) := by
-    have hr : ComputableInPolyTime
-        (fun p : SetSystem × ℕ => List.range (hsDistinctGround p.1).length)
-        encHittingSet (encList encUnary) := range.comp hUlen
-    have hm : ComputableInPolyTime (List.map (fun n : ℕ => n))
-        (encList encUnary) (encList encNat) := map unary_to_binary
-    simpa only [Function.comp_def, List.map_id_fun', id_eq] using hm.comp hr
-  have horArgs : ComputableInPolyTime
-      (fun p : SetSystem × ℕ => hsOrArgLists p.1)
-      encHittingSet encNatSetList := by
-    unfold hsOrArgLists
-    refine mapWithInput (by fun_prop) ?_
-    refine filterWithInput (hrU.comp (fst _ _)) ?_
-    have hget := listGetD_binary (encA := encNat) (encL := encList encNat) 0
-      (hU.comp ((fst encHittingSet (encList encNat)).comp (fst _ _))) (snd _ _)
-    have hA : ComputableInPolyTime (fun q : ((SetSystem × ℕ) × List ℕ) × ℕ => q.1.2)
-        (encPair (encPair encHittingSet (encList encNat)) encNat) (encList encNat) :=
-      (snd _ _).comp (fst _ _)
-    exact (by fun_prop : ComputableInPolyTime (fun r : ℕ × List ℕ => decide (r.1 ∈ r.2))
-      (encPair encNat (encList encNat)) encBool).comp (hget.prod hA)
-  have horGates : ComputableInPolyTime
-      (fun p : SetSystem × ℕ =>
-        (hsOrArgLists p.1).map fun l => ((Unbounded.Op.or l.length, l) : Unbounded.Op × List ℕ))
-      encHittingSet (encList (Circuit.encGate Unbounded.encOp)) := by
-    refine mapWithInput horArgs ?_
-    have hllen : ComputableInPolyTime (fun q : (SetSystem × ℕ) × List ℕ => q.2.length)
-        (encPair encHittingSet (encList encNat)) encUnary :=
-      (length_list encNat).comp (snd _ _)
-    exact (Unbounded.computableInPolyTime_or.comp hllen).prod (snd _ _)
-  have hmSets : ComputableInPolyTime
-      (fun p : SetSystem × ℕ => (hsOrArgLists p.1).length)
-      encHittingSet encUnary := (length_list (encList encNat)).comp horArgs
-  have handGate : ComputableInPolyTime
-      (fun p : SetSystem × ℕ =>
-        [((Unbounded.Op.and (hsOrArgLists p.1).length,
-          (List.range (hsOrArgLists p.1).length).map
-            (((hsDistinctGround p.1).length + min p.2 (hsDistinctGround p.1).length) + ·)) :
-          Unbounded.Op × List ℕ)])
-      encHittingSet (encList (Circuit.encGate Unbounded.encOp)) := by
-    refine cons' ((Unbounded.computableInPolyTime_and.comp hmSets).prod ?_) (const [])
-    refine mapWithInput (range.comp hmSets) ?_
-    have hn' := hnIn.comp (fst encHittingSet encUnary)
-    exact unary_to_binary.comp (unary_add' hn' (snd encHittingSet encUnary))
-  have hcode : ComputableInPolyTime
-      (fun p : SetSystem × ℕ => hsCircuitCode p.1 p.2)
-      encHittingSet (Circuit.encCode Unbounded.encOp) := by
-    unfold hsCircuitCode hsCircuitGates
-    exact (listAppend' horGates handGate).prod
-      (cons' (unary_to_binary.comp (unary_add' hnIn hmSets)) (const []))
-  have hmain : ComputableInPolyTime
-      (fun p : SetSystem × ℕ =>
-        (((hsDistinctGround p.1).length + min p.2 (hsDistinctGround p.1).length,
-           hsCircuitCode p.1 p.2), p.2))
-      encHittingSet
-      (encPair (encPair encUnary (Circuit.encCode Unbounded.encOp)) encNat) :=
-    (hnIn.prod hcode).prod (snd _ _)
-  have hmainWCS : ComputableInPolyTime
-      (fun p : SetSystem × ℕ =>
-        (⟨⟨hsToCircuit p.1 p.2, weft_hsToCircuit_le p.1 p.2, depth_hsToCircuit_le p.1 p.2⟩,
-          p.2⟩ : WCSInstance 2 2))
-      encHittingSet (encWCS 2 2) :=
-    hmain.of_enc_eq fun _ => by
-      simp only [encWCS_apply, encPair_apply, encWeftCircuit_apply, Circuit.encCircuit_apply,
-        code_hsToCircuit]
-      rfl
-  have hcond : ComputableInPolyTime
-      (fun p : SetSystem × ℕ => decide (p.2 ≤ (hsDistinctGround p.1).length))
-      encHittingSet encBool :=
-    binary_le' (snd _ _) (unary_to_binary.comp hUlen)
-  have hhit : ComputableInPolyTime (fun p : SetSystem × ℕ => hittableBool p.1)
-      encHittingSet encBool :=
-    computableInPolyTime_hittableBool.comp (fst _ _)
-  unfold hittingSetToWCS
-  exact hcond.ite hmainWCS (hhit.ite (const hsYesInstance) (const hsNoInstance))
-
-/-- **`HittingSet` belongs to `W[2]`** with parameter `k`. -/
-theorem hittingSet_mem_W : HittingSet ∈ W 2 encHittingSet Prod.snd :=
-  ⟨2, FPTReducible.of_computableInPolyTime computableInPolyTime_hittingSetToWCS
-    (h := id) (fun p => by
-      unfold hittingSetToWCS hsYesInstance hsNoInstance
-      split_ifs <;> simp)
-    fun p => (hittingSetToWCS_mem_iff p).symm⟩
-
-/-- **`SetCover` belongs to `W[2]`** with parameter `k`. -/
-theorem setCover_mem_W : SetCover ∈ W 2 encSetCover Prod.snd :=
-  fptReducible_setCover_hittingSet.mem_W hittingSet_mem_W
-
-/-! ### 5. Specification-Driven `SetSystem` Construction -/
-
-/-- Construct a `SetSystem` on positions `0, …, vs.length - 1` from a list of set specifications
-`specs` and a Boolean incidence test `mem`. -/
-@[expose] def ofSpecSetSystem {V T : Type} (vs : List V) (specs : List T)
-    (mem : T → V → Bool) : SetSystem :=
-  ⟨List.range vs.length,
-    specs.map fun t => (vs.zipIdx.filter fun p => mem t p.1).map Prod.snd⟩
-
-/-- Characterization of `HittingSet` on `ofSpecSetSystem vs specs mem`. -/
-theorem mem_hittingSet_ofSpecSetSystem_iff {V T : Type}
-    {vs : List V} {specs : List T} {mem : T → V → Bool} {k : ℕ} :
-    (ofSpecSetSystem vs specs mem, k) ∈ HittingSet ↔
-      ∃ H : Finset V, H.card ≤ k ∧ (∀ v ∈ H, v ∈ vs) ∧
-        ∀ t ∈ specs, ∃ v ∈ H, mem t v = true := by
-  classical
-  rw [mem_hittingSet_iff]
-  constructor
-  · rintro ⟨I, ⟨hIG, hIcov⟩, hcard⟩
-    have hlt (i : ℕ) (hi : i ∈ I) : i < vs.length := List.mem_range.1 (hIG i hi)
-    let H : Finset V := I.attach.image fun i => vs[i.1]'(hlt i.1 i.2)
-    refine ⟨H, (Finset.card_image_le.trans (by simp)).trans hcard, ?_, ?_⟩
-    · intro v hv
-      obtain ⟨i, _, rfl⟩ := Finset.mem_image.1 hv
-      exact List.getElem_mem _
-    · intro t ht
-      have hAt : ((vs.zipIdx.filter fun p => mem t p.1).map Prod.snd) ∈
-          (ofSpecSetSystem vs specs mem).sets := List.mem_map_of_mem ht
-      obtain ⟨i, hiI, hiA⟩ := hIcov _ hAt
-      have hex : ∃ p ∈ vs.zipIdx, mem t p.1 = true ∧ p.2 = i := by
-        obtain ⟨p, hp, rfl⟩ := List.mem_map.1 hiA
-        exact ⟨p, (List.mem_filter.1 hp).1, (List.mem_filter.1 hp).2, rfl⟩
-      obtain ⟨j, hj_lt, hmem, rfl⟩ := List.exists_mem_zipIdx'.1 hex
-      exact ⟨vs[j]'hj_lt, Finset.mem_image_of_mem _ (Finset.mem_attach _ ⟨j, hiI⟩), hmem⟩
-  · rintro ⟨H, hcard, hHvs, hHcov⟩
-    let I : Finset ℕ := H.image vs.idxOf
-    refine ⟨I, ⟨?_, ?_⟩, Finset.card_image_le.trans hcard⟩
-    · intro i hi
-      obtain ⟨v, hv, rfl⟩ := Finset.mem_image.1 hi
-      exact List.mem_range.2 (List.idxOf_lt_length_of_mem (hHvs v hv))
-    · intro A hA
-      obtain ⟨t, ht, rfl⟩ := List.mem_map.1 hA
-      obtain ⟨v, hvH, hmem⟩ := hHcov t ht
-      let i := vs.idxOf v
-      have hi_lt : i < vs.length := List.idxOf_lt_length_of_mem (hHvs v hvH)
-      have hget : vs[i]'hi_lt = v := List.getElem_idxOf hi_lt
-      have hpair_eq : (vs[i]'hi_lt, i) = (v, i) := Prod.ext hget rfl
-      obtain ⟨p, hp_zip, hp_eq⟩ := (List.exists_mem_zipIdx' (l := vs)
-        (p := fun q => q = (v, i))).2 ⟨i, hi_lt, hpair_eq⟩
-      subst hp_eq
-      exact ⟨i, Finset.mem_image_of_mem _ hvH,
-        List.mem_map.2 ⟨(v, i), List.mem_filter.2 ⟨hp_zip, hmem⟩, rfl⟩⟩
-
-/-- Polynomial-time certificate for `ofSpecSetSystem`. -/
-theorem computableInPolyTime_ofSpecSetSystem {γ V T : Type}
-    {encIn : γ ↪ List Bool} {encV : V ↪ List Bool} {encT : T ↪ List Bool}
-    {vs : γ → List V} {specs : γ → List T} {mem : γ → T → V → Bool}
-    (hvs : ComputableInPolyTime vs encIn (encList encV))
-    (hspecs : ComputableInPolyTime specs encIn (encList encT))
-    (hmem : ComputableInPolyTime (fun p : γ × (T × V) => mem p.1 p.2.1 p.2.2)
-      (encPair encIn (encPair encT encV)) encBool) :
-    ComputableInPolyTime (fun a => ofSpecSetSystem (vs a) (specs a) (mem a))
-      encIn encSetSystem := by
-  have hz : ComputableInPolyTime (fun a => (vs a).zipIdx)
-      encIn (encList (encPair encV encUnary)) :=
-    (zipIdx encV).comp hvs
-  have hr : ComputableInPolyTime (fun a => List.range (vs a).length)
-      encIn (encList encNat) := by
-    have h1 : ComputableInPolyTime (fun a => List.range (vs a).length)
-        encIn (encList encUnary) := range.comp ((length_list encV).comp hvs)
-    have h2 : ComputableInPolyTime (List.map (fun n : ℕ => n))
-        (encList encUnary) (encList encNat) := map unary_to_binary
-    simpa only [Function.comp_def, List.map_id_fun', id_eq] using h2.comp h1
-  have hsets : ComputableInPolyTime
-      (fun a => (specs a).map fun t =>
-        ((vs a).zipIdx.filter fun p => mem a t p.1).map Prod.snd)
-      encIn encNatSetList := by
-    refine mapWithInput hspecs ?_
-    have hfilt : ComputableInPolyTime
-        (fun p : γ × T => ((vs p.1).zipIdx.filter fun q => mem p.1 p.2 q.1))
-        (encPair encIn encT) (encList (encPair encV encUnary)) := by
-      refine filterWithInput (hz.comp (fst _ _)) ?_
-      have harg : ComputableInPolyTime
-          (fun q : (γ × T) × (V × ℕ) => (q.1.1, (q.1.2, q.2.1)))
-          (encPair (encPair encIn encT) (encPair encV encUnary))
-          (encPair encIn (encPair encT encV)) := by fun_prop
-      exact hmem.comp harg
-    refine mapWithInput hfilt ?_
-    exact unary_to_binary.comp ((snd encV encUnary).comp (snd _ _))
-  unfold ofSpecSetSystem
-  exact computableInPolyTime_setSystemMk hr hsets
+theorem greedyHittingSet_feasible_and_bound {H : HypergraphInstance} (hH : H.Hittable) :
+    minHittingSet.Feasible H (greedyHittingSet H) ∧
+      minHittingSet.cost H (greedyHittingSet H) ≤
+        (1 + Real.log H.edges.length) * minHittingSet.opt H := by
+  have hcov_sys : (hypergraphToSetSystem H).Coverable :=
+    (hypergraphToSetSystem_coverable_iff H).mpr hH
+  have hg_cov := SetSystem.greedyIndices_isCover hcov_sys
+  let I := (hypergraphToSetSystem H).greedyIndices.map Fin.val
+  have hI_cov : (hypergraphToSetSystem H).isCoverList I = true := by
+    rw [(hypergraphToSetSystem H).isCoverList_eq_true_iff]
+    refine ⟨fun i hi => ?_, fun u hu => ?_⟩
+    · obtain ⟨j, -, rfl⟩ := List.mem_map.mp hi
+      exact j.isLt
+    · obtain ⟨j, hj, huj⟩ := hg_cov u hu
+      rw [List.mem_toFinset] at hj
+      exact ⟨j.val, List.mem_map.mpr ⟨j, hj, rfl⟩, j.isLt, huj⟩
+  have hfeas : H.isHittingList (greedyHittingSet H) = true :=
+    liftSetCoverToHittingSet_isHittingList hI_cov
+  refine ⟨hfeas, ?_⟩
+  have hlen : (greedyHittingSet H).length = (hypergraphToSetSystem H).greedyIndices.length := by
+    simp [greedyHittingSet, liftSetCoverToHittingSet]
+  have hlog := SetSystem.greedyIndices_length_le_one_add_log hcov_sys
+  have hcard_ground : (hypergraphToSetSystem H).ground.toFinset.card = H.edges.length := by
+    simp [hypergraphToSetSystem, List.toFinset_card_of_nodup List.nodup_range]
+  have hopt_le : (hypergraphToSetSystem H).optCoverSize ≤ H.optHittingSize := by
+    obtain ⟨U, hU, hUcard⟩ := HypergraphInstance.exists_isHittingSet_optHittingSize hH
+    let C : Finset (Fin (hypergraphToSetSystem H).sets.length) :=
+      Finset.univ.filter fun i =>
+        H.distinctVertices[i.1]'(by simpa [hypergraphToSetSystem] using i.isLt) ∈ U
+    have hC_cov : (hypergraphToSetSystem H).IsCover C := by
+      intro j hj
+      rw [hypergraphToSetSystem, List.mem_range] at hj
+      obtain ⟨v, hvU, hve⟩ := hU.2 H.edges[j] (List.getElem_mem hj)
+      have hvD : v ∈ H.distinctVertices :=
+        HypergraphInstance.mem_distinctVertices.mpr (hU.1 v hvU)
+      obtain ⟨i, hi, rfl⟩ := List.mem_iff_getElem.mp hvD
+      have hi' : i < (hypergraphToSetSystem H).sets.length := by
+        simpa [hypergraphToSetSystem] using hi
+      refine ⟨⟨i, hi'⟩, Finset.mem_filter.mpr ⟨Finset.mem_univ _, hvU⟩, ?_⟩
+      simp only [hypergraphToSetSystem, Fin.getElem_fin, List.getElem_map, List.mem_filter,
+        List.mem_range, decide_eq_true_eq]
+      exact ⟨hj, by rwa [List.getD_eq_getElem _ _ hj]⟩
+    have hC_card : C.card ≤ U.card := by
+      refine Finset.card_le_card_of_injOn
+        (fun i => H.distinctVertices[i.1]'(by simpa [hypergraphToSetSystem] using i.isLt))
+        (fun i hi => (Finset.mem_filter.mp hi).2) ?_
+      intro i₁ _ i₂ _ heq
+      exact Fin.ext ((H.nodup_distinctVertices.getElem_inj_iff).mp heq)
+    exact (SetSystem.optCoverSize_le hC_cov).trans (hC_card.trans_eq hUcard)
+  have h1_nonneg : 0 ≤ 1 + Real.log H.edges.length := by
+    rcases Nat.eq_zero_or_pos H.edges.length with h0 | hpos
+    · simp [h0]
+    · have hge1 : (1 : ℝ) ≤ H.edges.length := by exact_mod_cast hpos
+      linarith [Real.log_nonneg hge1]
+  simp only [minHittingSet, hlen]
+  rw [hcard_ground] at hlog
+  exact hlog.trans (mul_le_mul_of_nonneg_left (by exact_mod_cast hopt_le) h1_nonneg)
 
 end Cslib.Complexity
