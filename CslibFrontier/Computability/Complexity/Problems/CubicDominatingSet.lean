@@ -1,43 +1,35 @@
 module
+-- upstream: candidate
 
 public import CslibFrontier.Computability.Complexity.Problems.DominatingSet
-public import CslibFrontier.Computability.Complexity.Problems.ThreeSAT
-public import CslibFrontier.Computability.Complexity.Reduction
-public import CslibFrontier.Computability.Complexity.Problems.CubicCapGadget
+public import CslibFrontier.Computability.Complexity.Problems.ExactThreeSAT
 
+import CslibFrontier.Computability.Complexity.Classes.NP.Witness
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Length
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.List
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Membership
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Nat.Binary
 import CslibFrontier.Computability.Machines.Turing.MultiTape.Complexity.PolyTime.Plain
-import CslibFrontier.Logics.Propositional.CNF.PolyTime
+import Mathlib.Combinatorics.SimpleGraph.DegreeSum
+import Mathlib.Data.List.GetD
+import Mathlib.Tactic.FinCases
 
 /-!
-# NP-Completeness of Connected Cubic Dominating Set
+# NP-Completeness of Dominating Set on Cubic Graphs
 
-Formalizes the `NP`-completeness of `CslibFrontier.Complexity.CubicDominatingSet` — the dominating
-set decision problem restricted to connected $3$-regular (cubic) finite simple graphs — via a
-polynomial-time many-one reduction from `Cslib.Complexity.ThreeSAT` using the $7$-vertex $1$-port
-cubic degree-cap gadget $W_7$ from `CslibFrontier.Computability.Complexity.Problems.CubicCapGadget`.
+This module proves that the **Dominating Set** decision problem restricted to cubic (`3`-regular)
+graphs (`CubicDominatingSet`) is `NP`-complete on multi-tape Turing machines under standard Lean
+axioms:
 
-## Main definitions
-
-- `CslibFrontier.Complexity.k4Graph`: connected cubic graph $K_4$ for trivial `ThreeSAT` instances.
-- `CslibFrontier.Complexity.cubicVarV`, `CslibFrontier.Complexity.cubicClauseV`: vertex identifiers
-  for the $C_{3m}$ variable rings and clause vertices.
-- `CslibFrontier.Complexity.toCubicDominatingSet`: polynomial-time reduction from `ThreeSAT` to
-  `CubicDominatingSet`.
-
-## Main results
-
-- `CslibFrontier.Complexity.toCubicDominatingSet_mem_iff`: correctness of the reduction.
-- `CslibFrontier.Complexity.computableInPolyTime_toCubicDominatingSet`: polynomial-time
-  computability.
-- `CslibFrontier.Complexity.polyTimeReducible_ThreeSAT_CubicDominatingSet`:
-  `PolyTimeReducible encCNF encDominatingSet ThreeSAT CubicDominatingSet`.
-- `CslibFrontier.Complexity.CubicDominatingSet_npHard`,
-  `CslibFrontier.Complexity.CubicDominatingSet_npComplete`: `CubicDominatingSet` is `NP`-complete.
+* `CubicDominatingSet`, `isCubicBool`, and `CubicDominatingSet_mem_NP`: **Dominating Set**
+  restricted to cubic (`3`-regular) graphs and its membership in `NP`.
+* `toCubicDominatingSet`, `computableInPolyTime_toCubicDominatingSet`, and
+  `toCubicDominatingSet_mem_iff`: polynomial-time Karp reduction from `ExactThreeSAT` via a
+  `13`-vertex cubic variable-occurrence gadget (`3` ports of internal degree `2` and `10` internal
+  degree-`3` vertices, minimum internal dominating number `4`).
+* `CubicDominatingSet_npHard` and `CubicDominatingSet_npComplete`: `NP`-hardness and
+  `NP`-completeness of `CubicDominatingSet`.
 -/
 
 public section
@@ -46,1447 +38,1447 @@ namespace CslibFrontier.Complexity
 
 open Cslib.Complexity Cslib.Logic.PL Turing.MultiTapeTM ComputableInPolyTime
 
-/-! ### 1. Trivial Instance Graph $K_4$ and Vertex Encodings -/
+/-- **Dominating Set on cubic (`3`-regular) graphs**. -/
+@[expose] def CubicDominatingSet : Set DominatingSetInstance :=
+  {x | x.graph.induced.IsRegularOfDegree 3 ∧ x ∈ DominatingSet}
 
-/-- Connected cubic graph $K_4$ used for trivial `ThreeSAT` instances. -/
-@[expose]
+/-- Membership characterization of `CubicDominatingSet`. -/
+theorem mem_CubicDominatingSet_iff (x : DominatingSetInstance) :
+    x ∈ CubicDominatingSet ↔ x.graph.induced.IsRegularOfDegree 3 ∧ x ∈ DominatingSet := Iff.rfl
+
+/-- Executable `3`-regularity test on `G.induced`. -/
+def isCubicBool (G : Graph) : Bool :=
+  G.distinctVertices.all fun u ↦
+    decide ((G.distinctVertices.filter fun v ↦ G.adjBool u v).length = 3)
+
+@[fun_prop] theorem computableInPolyTime_isCubicBool :
+    ComputableInPolyTime isCubicBool encGraph encBool := by
+  unfold isCubicBool; fun_prop
+
+theorem isCubicBool_eq_true_iff (G : Graph) :
+    isCubicBool G = true ↔ G.induced.IsRegularOfDegree 3 := by
+  classical
+  simp only [isCubicBool, List.all_eq_true, Graph.mem_distinctVertices, decide_eq_true_eq,
+    _root_.SimpleGraph.IsRegularOfDegree]
+  have hdeg : ∀ (u : ℕ) (hu : u ∈ G.vertices),
+      (G.distinctVertices.filter fun v ↦ G.adjBool u v).length = G.induced.degree ⟨u, hu⟩ := by
+    intro u hu
+    rw [← List.toFinset_card_of_nodup (G.nodup_distinctVertices.filter _),
+      ← G.induced.card_neighborFinset_eq_degree]
+    have heq : (G.distinctVertices.filter fun v ↦ G.adjBool u v).toFinset =
+        (G.induced.neighborFinset ⟨u, hu⟩).map (Function.Embedding.subtype _) := by
+      ext v
+      simp only [List.mem_toFinset, List.mem_filter, Graph.mem_distinctVertices,
+        Graph.adjBool_eq_true_iff, Finset.mem_map, Function.Embedding.coe_subtype,
+        _root_.SimpleGraph.mem_neighborFinset, Graph.induced_adj, Subtype.exists]
+      exact ⟨fun ⟨hv, ha⟩ ↦ ⟨v, hv, ha, rfl⟩, by rintro ⟨w, hw, ha, rfl⟩; exact ⟨hw, ha⟩⟩
+    rw [heq, Finset.card_map]
+  exact ⟨fun h ⟨u, hu⟩ ↦ (hdeg u hu).symm.trans (h u hu),
+    fun h u hu ↦ (hdeg u hu).trans (h ⟨u, hu⟩)⟩
+
+/-- `CubicDominatingSet` belongs to `NP`. -/
+theorem CubicDominatingSet_mem_NP : CubicDominatingSet ∈ NP encDominatingSet := by
+  have hset : (CubicDominatingSet : Set DominatingSetInstance) =
+      {x : DominatingSetInstance | ∃ S : Finset ℕ, (∀ v ∈ S, v ∈ x.graph.vertices) ∧
+        (isCubicBool x.graph = true ∧ S.card = x.bound ∧
+          (∀ v ∈ x.graph.vertices, v ∈ S ∨ ∃ s ∈ S, x.graph.toSimpleGraph.Adj v s))} := by
+    ext ⟨G, k⟩
+    simp only [CubicDominatingSet, Set.mem_ofPred_eq, isCubicBool_eq_true_iff,
+      mem_DominatingSet_iff]
+    exact ⟨fun ⟨hcub, S, hSV, hdom, hcard⟩ ↦ ⟨S, hSV, hcub, hcard, hdom⟩,
+      fun ⟨S, hSV, hcub, hcard, hdom⟩ ↦ ⟨hcub, S, hSV, hdom, hcard⟩⟩
+  change (CubicDominatingSet : Set DominatingSetInstance) ∈ NP encDominatingSet
+  rw [hset]
+  refine mem_NP_of_subsetWitness (encγ := encNat)
+    (vs := fun (x : DominatingSetInstance) ↦ x.graph.vertices)
+    (check := fun (y : DominatingSetInstance × List ℕ) ↦
+      isCubicBool y.1.graph && decide (y.2.length = y.1.bound) &&
+      DominatingSet.isDominating y.1.graph y.2) (by fun_prop) (by fun_prop) fun x l hl _ ↦ ?_
+  simp only [Bool.and_eq_true, decide_eq_true_eq, DominatingSet.isDominating_eq_true_iff,
+    List.mem_toFinset, List.toFinset_card_of_nodup hl, and_assoc]
+
+/-! ### The `13`-vertex cubic variable-occurrence gadget `H₁₃` -/
+
+private def h13Edges : List (ℕ × ℕ) :=
+  [(0, 4), (0, 5), (1, 2), (1, 10), (2, 9), (3, 7), (3, 11), (3, 12), (4, 10), (4, 11),
+   (5, 7), (5, 9), (6, 8), (6, 11), (6, 12), (7, 8), (8, 9), (10, 12)]
+
+private def h13Adj (u v : Fin 13) : Bool :=
+  h13Edges.any fun e ↦ decide ((e.1 = u.1 ∧ e.2 = v.1) ∨ (e.1 = v.1 ∧ e.2 = u.1))
+
+private def h13Closed (u v : Fin 13) : Bool :=
+  decide (u = v) || h13Adj u v
+
+private def h13DomInternal (S : Finset (Fin 13)) : Prop :=
+  ∀ u : Fin 13, 3 ≤ u.1 → ∃ w ∈ S, h13Closed u w = true
+
+private def h13N10 : Fin 4 → Fin 13 := ![1, 4, 10, 12]
+private def h13N9 : Fin 4 → Fin 13 := ![2, 5, 8, 9]
+private def h13N3 : Fin 4 → Fin 13 := ![3, 7, 11, 12]
+
+private lemma h13_no_three_dom (a b : Fin 4) (z : Fin 13) :
+    ∃ u : Fin 13, 3 ≤ u.1 ∧
+      h13Closed u (h13N10 a) = false ∧
+      h13Closed u (h13N9 b) = false ∧
+      h13Closed u z = false := by
+  fin_cases a <;> fin_cases b <;> revert z <;> decide
+
+private lemma h13_no_zero_two_four (a : Fin 4) (z : Fin 13) :
+    ∃ u : Fin 13, 3 ≤ u.1 ∧
+      h13Closed u 0 = false ∧ h13Closed u 2 = false ∧
+      h13Closed u (h13N10 a) = false ∧ h13Closed u z = false := by
+  fin_cases a <;> revert z <;> decide
+
+private lemma h13_no_one_two_four (a : Fin 4) (z : Fin 13) :
+    ∃ u : Fin 13, 3 ≤ u.1 ∧
+      h13Closed u 1 = false ∧ h13Closed u 2 = false ∧
+      h13Closed u (h13N3 a) = false ∧ h13Closed u z = false := by
+  fin_cases a <;> revert z <;> decide
+
+private lemma h13_closed_ten (w : Fin 13) (h : h13Closed 10 w = true) :
+    ∃ a : Fin 4, w = h13N10 a := by
+  revert w; decide
+
+private lemma h13_closed_nine (w : Fin 13) (h : h13Closed 9 w = true) :
+    ∃ b : Fin 4, w = h13N9 b := by
+  revert w; decide
+
+private lemma h13_closed_three (w : Fin 13) (h : h13Closed 3 w = true) :
+    ∃ a : Fin 4, w = h13N3 a := by
+  revert w; decide
+
+private lemma h13N10_ne_h13N9 (a b : Fin 4) : h13N10 a ≠ h13N9 b := by
+  revert a b; decide
+
+private lemma h13N10_ne_zero_two (a : Fin 4) : h13N10 a ≠ 0 ∧ h13N10 a ≠ 2 := by
+  revert a; decide
+
+private lemma h13N3_ne_one_two (a : Fin 4) : h13N3 a ≠ 1 ∧ h13N3 a ≠ 2 := by
+  revert a; decide
+
+private lemma h13_exists_singleton {R : Finset (Fin 13)} (hR : R.card ≤ 1) :
+    ∃ z : Fin 13, ∀ w ∈ R, w = z := by
+  rcases Nat.eq_zero_or_pos R.card with h0 | _
+  · exact ⟨0, fun w hw ↦ (Finset.notMem_empty w (Finset.card_eq_zero.mp h0 ▸ hw)).elim⟩
+  · obtain ⟨z, hzR⟩ := Finset.card_eq_one.mp (by omega : R.card = 1)
+    exact ⟨z, fun w hw ↦ Finset.mem_singleton.mp (hzR ▸ hw)⟩
+
+private lemma h13_four_le_card_of_domInternal {S : Finset (Fin 13)} (hS : h13DomInternal S) :
+    4 ≤ S.card := by
+  by_contra hlt
+  obtain ⟨w₁, hw₁S, hw₁⟩ := hS 10 (by decide)
+  obtain ⟨a, rfl⟩ := h13_closed_ten w₁ hw₁
+  obtain ⟨w₂, hw₂S, hw₂⟩ := hS 9 (by decide)
+  obtain ⟨b, rfl⟩ := h13_closed_nine w₂ hw₂
+  have hne : h13N10 a ≠ h13N9 b := h13N10_ne_h13N9 a b
+  let R := (S.erase (h13N10 a)).erase (h13N9 b)
+  have c1 := Finset.card_erase_add_one hw₁S
+  have c2 : R.card + 1 = (S.erase (h13N10 a)).card :=
+    Finset.card_erase_add_one (Finset.mem_erase.mpr ⟨hne.symm, hw₂S⟩)
+  obtain ⟨z, hz⟩ := h13_exists_singleton (R := R) (by omega)
+  obtain ⟨u, hu3, hn1, hn2, hn3⟩ := h13_no_three_dom a b z
+  obtain ⟨w, hwS, hwu⟩ := hS u hu3
+  by_cases hw1 : w = h13N10 a
+  · subst hw1; exact Bool.false_ne_true (hn1.symm.trans hwu)
+  · by_cases hw2 : w = h13N9 b
+    · subst hw2; exact Bool.false_ne_true (hn2.symm.trans hwu)
+    · have hwz : w = z := hz w (Finset.mem_erase.mpr ⟨hw2, Finset.mem_erase.mpr ⟨hw1, hwS⟩⟩)
+      subst hwz; exact Bool.false_ne_true (hn3.symm.trans hwu)
+
+private lemma h13_port_exclusion {S : Finset (Fin 13)} (hS : h13DomInternal S)
+    (hcard : S.card ≤ 4) (h01 : (0 : Fin 13) ∈ S ∨ (1 : Fin 13) ∈ S) (h2 : (2 : Fin 13) ∈ S) :
+    False := by
+  rcases h01 with h0 | h1
+  · obtain ⟨w, hwS, hw⟩ := hS 10 (by decide)
+    obtain ⟨a, rfl⟩ := h13_closed_ten w hw
+    obtain ⟨hne0, hne2⟩ := h13N10_ne_zero_two a
+    let R := ((S.erase 0).erase 2).erase (h13N10 a)
+    have c1 := Finset.card_erase_add_one h0
+    have c2 := Finset.card_erase_add_one (Finset.mem_erase.mpr ⟨(by decide : (2 : Fin 13) ≠ 0), h2⟩)
+    have c3 : R.card + 1 = ((S.erase 0).erase 2).card :=
+      Finset.card_erase_add_one (Finset.mem_erase.mpr ⟨hne2, Finset.mem_erase.mpr ⟨hne0, hwS⟩⟩)
+    obtain ⟨z, hz⟩ := h13_exists_singleton (R := R) (by omega)
+    obtain ⟨u, hu3, fn0, fn2, fna, fnz⟩ := h13_no_zero_two_four a z
+    obtain ⟨x, hxS, hxu⟩ := hS u hu3
+    by_cases hx0 : x = 0
+    · subst hx0; exact Bool.false_ne_true (fn0.symm.trans hxu)
+    · by_cases hx2 : x = 2
+      · subst hx2; exact Bool.false_ne_true (fn2.symm.trans hxu)
+      · by_cases hxa : x = h13N10 a
+        · subst hxa; exact Bool.false_ne_true (fna.symm.trans hxu)
+        · have hxz := hz x (Finset.mem_erase.mpr
+            ⟨hxa, Finset.mem_erase.mpr ⟨hx2, Finset.mem_erase.mpr ⟨hx0, hxS⟩⟩⟩)
+          subst hxz; exact Bool.false_ne_true (fnz.symm.trans hxu)
+  · obtain ⟨w, hwS, hw⟩ := hS 3 (by decide)
+    obtain ⟨a, rfl⟩ := h13_closed_three w hw
+    obtain ⟨hne1, hne2⟩ := h13N3_ne_one_two a
+    let R := ((S.erase 1).erase 2).erase (h13N3 a)
+    have c1 := Finset.card_erase_add_one h1
+    have c2 := Finset.card_erase_add_one (Finset.mem_erase.mpr ⟨(by decide : (2 : Fin 13) ≠ 1), h2⟩)
+    have c3 : R.card + 1 = ((S.erase 1).erase 2).card :=
+      Finset.card_erase_add_one (Finset.mem_erase.mpr ⟨hne2, Finset.mem_erase.mpr ⟨hne1, hwS⟩⟩)
+    obtain ⟨z, hz⟩ := h13_exists_singleton (R := R) (by omega)
+    obtain ⟨u, hu3, fn1, fn2, fna, fnz⟩ := h13_no_one_two_four a z
+    obtain ⟨x, hxS, hxu⟩ := hS u hu3
+    by_cases hx1 : x = 1
+    · subst hx1; exact Bool.false_ne_true (fn1.symm.trans hxu)
+    · by_cases hx2 : x = 2
+      · subst hx2; exact Bool.false_ne_true (fn2.symm.trans hxu)
+      · by_cases hxa : x = h13N3 a
+        · subst hxa; exact Bool.false_ne_true (fna.symm.trans hxu)
+        · have hxz := hz x (Finset.mem_erase.mpr
+            ⟨hxa, Finset.mem_erase.mpr ⟨hx2, Finset.mem_erase.mpr ⟨hx1, hxS⟩⟩⟩)
+          subst hxz; exact Bool.false_ne_true (fnz.symm.trans hxu)
+
+private def h13SHi : List ℕ := [0, 1, 3, 8]
+private def h13SLo : List ℕ := [2, 4, 6, 7]
+
+private lemma h13SHi_dom_all :
+    ∀ u : Fin 13, ∃ w ∈ h13SHi, ∃ hw : w < 13, h13Closed u ⟨w, hw⟩ = true := by
+  decide
+
+private lemma h13SLo_dom_all :
+    ∀ u : Fin 13, ∃ w ∈ h13SLo, ∃ hw : w < 13, h13Closed u ⟨w, hw⟩ = true := by
+  decide
+
+private lemma h13_internal_deg :
+    ∀ u : Fin 13, ((List.finRange 13).filter fun v ↦ h13Adj u v).length =
+      if u.1 < 3 then 2 else 3 := by
+  decide
+
+/-! ### Reduction from `ExactThreeSAT` to `CubicDominatingSet` -/
+
+/-- The `4`-vertex complete graph `K₄`, used as base cubic gadget. -/
 def k4Graph : Graph :=
   ⟨[0, 1, 2, 3], [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]⟩
 
-private lemma k4Graph_connected : k4Graph.induced.Connected := by
-  refine k4Graph.induced.connected_iff_exists_forall_reachable.mpr ⟨⟨0, by decide⟩, fun ⟨v,
-    hv⟩ ↦ ?_⟩
-  rcases (by simpa [k4Graph] using hv : v = 0 ∨ v = 1 ∨ v = 2 ∨ v = 3) with rfl | rfl | rfl | rfl
-  · exact _root_.SimpleGraph.Reachable.refl _
-  all_goals
-    exact _root_.SimpleGraph.Adj.reachable
-      (by simp [k4Graph, Graph.induced_adj, Graph.toSimpleGraph_adj])
+theorem k4Graph_isCubic : k4Graph.induced.IsRegularOfDegree 3 :=
+  (isCubicBool_eq_true_iff k4Graph).mp (by decide)
 
-private lemma list_getD_eq {α : Type*} (l : List α) (d : α) {i : ℕ} (hi : i < l.length) :
-    l.getD i d = l[i] := by simp [List.getD_eq_getElem?_getD, hi]
+theorem k4Graph_one_mem_CubicDominatingSet :
+    (⟨k4Graph, 1⟩ : DominatingSetInstance) ∈ CubicDominatingSet := by
+  refine ⟨k4Graph_isCubic, mem_DominatingSet_iff.mpr ⟨{0}, fun v hv ↦ ?_, fun v hv ↦ ?_, by simp⟩⟩
+  · simp only [Finset.mem_singleton] at hv; subst hv; decide
+  · by_cases hv0 : v = 0
+    · exact Or.inl (Finset.mem_singleton.mpr hv0)
+    · refine Or.inr ⟨0, Finset.mem_singleton_self 0, Graph.toSimpleGraph_adj.mpr ⟨hv0, Or.inr ?_⟩⟩
+      simp only [k4Graph, List.mem_cons, List.not_mem_nil, or_false] at hv ⊢
+      rcases hv with rfl | rfl | rfl | rfl
+      exacts [(hv0 rfl).elim, Or.inl rfl, Or.inr (Or.inl rfl), Or.inr (Or.inr (Or.inl rfl))]
 
-private lemma k4Graph_cubic (v : {w // w ∈ k4Graph.vertices}) :
-    k4Graph.induced.degree v = 3 := by
-  rw [← cubicGraphDegBool_eq_degree]; rcases v with ⟨v, hv⟩
-  rcases (by simpa [k4Graph] using hv : v = 0 ∨ v = 1 ∨ v = 2 ∨
-    v = 3) with rfl | rfl | rfl | rfl <;>
-    (dsimp only; clear hv; decide)
-
-/-- `(k4Graph, 1)` is a yes-instance of `CubicDominatingSet`. -/
-theorem k4Graph_mem_one : (⟨k4Graph, 1⟩ : DominatingSetInstance) ∈ CubicDominatingSet := by
-  rw [mem_CubicDominatingSet_iff]
-  refine ⟨k4Graph_connected, k4Graph_cubic, mem_DominatingSet_iff.mpr
-    ⟨{0}, fun v hv ↦ by simp [k4Graph, Finset.mem_singleton.mp hv], fun v hv ↦ ?_, by simp⟩⟩
-  rcases (by simpa [k4Graph] using hv : v = 0 ∨ v = 1 ∨ v = 2 ∨ v = 3) with rfl | rfl | rfl | rfl
-  · left; simp
-  all_goals right; exact ⟨0, by simp, by simp [k4Graph, Graph.toSimpleGraph_adj]⟩
-
-private lemma k4Graph_not_mem_zero :
+theorem k4Graph_zero_notMem_CubicDominatingSet :
     (⟨k4Graph, 0⟩ : DominatingSetInstance) ∉ CubicDominatingSet := by
-  intro h; rw [mem_CubicDominatingSet_iff] at h
-  rcases mem_DominatingSet_iff.mp h.2.2 with ⟨S, _, hS, hcard⟩
-  have hS0 : S = ∅ := Finset.card_eq_zero.mp hcard; subst hS0
-  have := hS 0 (by simp [k4Graph]); simp at this
+  rintro ⟨_, hdom⟩
+  obtain ⟨S, _, hS, hcard⟩ := mem_DominatingSet_iff.mp hdom
+  rw [Finset.card_eq_zero.mp hcard] at hS
+  simpa using hS 0 (by decide)
 
-/-- Vertex identifier for variable ring `i`, clause copy `j`, role `r ∈ {0,1,2}` (`t, f, g`). -/
-@[expose]
-def cubicVarV (m i j r : ℕ) : ℕ := 4 * (3 * (i * m + j) + r)
+private def gadVert (s u : ℕ) : ℕ := 4 * (16 * s + u)
+private def ternVert (i : ℕ) : ℕ := 4 * i + 1
+private def binVert (s : ℕ) : ℕ := 4 * s + 2
 
-/-- Vertex identifier for clause `j`. -/
-@[expose]
-def cubicClauseV (j : ℕ) : ℕ := 4 * j + 1
+private def occSlots (L : List (ℕ × Bool)) (v : ℕ) : List ℕ :=
+  (List.range L.length).filter fun t ↦ decide ((L.getD t (0, false)).1 = v)
 
-private lemma cubicVarV_injective {m i₁ j₁ r₁ i₂ j₂ r₂ : ℕ}
-    (hj₁ : j₁ < m) (hj₂ : j₂ < m) (hr₁ : r₁ < 3) (hr₂ : r₂ < 3)
-    (h : cubicVarV m i₁ j₁ r₁ = cubicVarV m i₂ j₂ r₂) :
-    i₁ = i₂ ∧ j₁ = j₂ ∧ r₁ = r₂ := by
-  unfold cubicVarV at h
-  have h1 : 3 * (i₁ * m + j₁) + r₁ = 3 * (i₂ * m + j₂) + r₂ := by omega
-  have hr : r₁ = r₂ := by omega
-  have h2 : i₁ * m + j₁ = i₂ * m + j₂ := by omega
-  have hi : i₁ = i₂ := by
-    by_contra hne
-    rcases lt_or_gt_of_ne hne with hlt | hgt
-    · have : (i₁ + 1) * m ≤ i₂ * m := Nat.mul_le_mul_right m hlt
-      rw [Nat.succ_mul] at this; omega
-    · have : (i₂ + 1) * m ≤ i₁ * m := Nat.mul_le_mul_right m hgt
-      rw [Nat.succ_mul] at this; omega
-  subst hi
-  exact ⟨rfl, by omega, hr⟩
+private def nextSlot (L : List (ℕ × Bool)) (s : ℕ) : ℕ :=
+  let occ := occSlots L (L.getD s (0, false)).1
+  let idx := occ.idxOf s
+  if idx + 1 < occ.length then occ.getD (idx + 1) 0 else occ.getD 0 0
 
-/-! ### 2. Base Graph Construction and Reduction -/
+private def negPort (L : List (ℕ × Bool)) (s : ℕ) : ℕ :=
+  if (L.getD s (0, false)).2 then 2 else 1
 
-/-- Normalized clause list of a valid nonempty `ThreeSAT` formula: original clauses deduplicated,
-followed by `n` tautological connectivity clauses `(v_i ∨ ¬v_i ∨ v_{(i+1)%n})`. -/
-private def normClauses (φ : CNF ℕ) : CNF ℕ :=
-  let vars := dedupList φ.vars
-  let n := vars.length
-  φ.map dedupList ++
-    (polyRange n).map fun i ↦
-      dedupList [(vars.getD i 0, true), (vars.getD i 0, false),
-        (vars.getD (if i + 1 < n then i + 1 else 0) 0, true)]
+private def posBinPort (L : List (ℕ × Bool)) (s : ℕ) : ℕ :=
+  if (L.getD s (0, false)).2 then 1 else 2
 
-/-- Base (uncapped, max-degree-3) graph constructed from `vars` and `clauses`, using a $C_{3m}$
-cycle `(0, 1, 2)` for each variable ring. -/
-private def baseGraphOf (vars : List ℕ) (clauses : CNF ℕ) : Graph :=
-  let n := vars.length
-  let m := clauses.length
-  let varVerts := (polyRange n).flatMap fun i ↦
-    (polyRange m).flatMap fun j ↦
-      [cubicVarV m i j 0, cubicVarV m i j 1, cubicVarV m i j 2]
-  let clVerts := (polyRange m).map cubicClauseV
-  let ringEdges := (polyRange n).flatMap fun i ↦
-    (polyRange m).flatMap fun j ↦
-      let jnext := if j + 1 < m then j + 1 else 0
-      [(cubicVarV m i j 0, cubicVarV m i j 1),
-       (cubicVarV m i j 1, cubicVarV m i j 2),
-       (cubicVarV m i j 2, cubicVarV m i jnext 0)]
-  let clEdges := (polyRange n).flatMap fun i ↦
-    (polyRange m).flatMap fun j ↦
-      let v := vars.getD i 0
-      let c := clauses.getD j []
-      (if c.any fun l ↦ decide (l = (v, true)) then
-        [(cubicClauseV j, cubicVarV m i j 0)] else []) ++
-      (if c.any fun l ↦ decide (l = (v, false)) then
-        [(cubicClauseV j, cubicVarV m i j 1)] else [])
-  ⟨varVerts ++ clVerts, ringEdges ++ clEdges⟩
+private def isNonemptyExact3 (φ : CNF ℕ) : Bool :=
+  !φ.isEmpty && φ.all fun c ↦ decide (c.length = 3)
 
-/-- Validity check for a nonempty 3-CNF without empty clauses. -/
-private def isNontrivialThreeCNF (φ : CNF ℕ) : Bool :=
-  decide (0 < φ.length) && φ.all fun c ↦ decide (0 < c.length) && decide (c.length ≤ 3)
+private def cubicSATGraph (φ : CNF ℕ) : Graph :=
+  let ψ := φ ++ φ
+  let M := ψ.length
+  let L := ψ.flatten
+  let vGad := (List.range (3 * M)).flatMap fun s ↦ (List.range 13).map fun u ↦ gadVert s u
+  let vTern := (List.range M).map ternVert
+  let vBin := (List.range (3 * M)).map binVert
+  let eGad := (List.range (3 * M)).flatMap fun s ↦
+    h13Edges.map fun e ↦ (gadVert s e.1, gadVert s e.2)
+  let eTern := (List.range M).flatMap fun i ↦
+    [0, 1, 2].map fun p ↦ (ternVert i, gadVert (3 * i + p) 0)
+  let eBin := (List.range (3 * M)).flatMap fun s ↦
+    [(binVert s, gadVert s (negPort L s)),
+     (binVert s, gadVert (nextSlot L s) (posBinPort L (nextSlot L s)))]
+  let ePair := (List.range (3 * φ.length)).map fun t ↦ (binVert (2 * t), binVert (2 * t + 1))
+  ⟨(vGad ++ vTern) ++ vBin, ((eGad ++ eTern) ++ eBin) ++ ePair⟩
 
-/-- The polynomial-time reduction from `ThreeSAT` to `CubicDominatingSet`. -/
+/-- Polynomial-time reduction from `ExactThreeSAT` to `CubicDominatingSet`. -/
 def toCubicDominatingSet (φ : CNF ℕ) : DominatingSetInstance :=
-  if φ.isEmpty then
-    ⟨k4Graph, 1⟩
-  else if !isNontrivialThreeCNF φ then
-    ⟨k4Graph, 0⟩
-  else
-    let vars := dedupList φ.vars
-    let clauses := normClauses φ
-    let B := baseGraphOf vars clauses
-    let T := (B.vertices.map fun u ↦ 3 - cubicGraphDegBool B u).sum
-    ⟨cappedGraphOf B, vars.length * clauses.length + 2 * T⟩
+  if φ.isEmpty then ⟨k4Graph, 1⟩
+  else if isNonemptyExact3 φ then ⟨cubicSATGraph φ, 24 * φ.length⟩
+  else ⟨k4Graph, 0⟩
 
-/-! ### 3. Base Graph Structure, Degree Bounds, and Connectedness -/
+section CubicPolyTime
 
-private lemma baseGraphOf_vertices_nodup (vars : List ℕ) (clauses : CNF ℕ) :
-    (baseGraphOf vars clauses).vertices.Nodup := by
-  unfold baseGraphOf
-  simp only [polyRange_eq_range]
-  set n := vars.length; set m := clauses.length
-  refine List.nodup_append.mpr ⟨?_, ?_, ?_⟩
-  · refine List.nodup_flatMap.mpr ⟨fun i _ ↦ ?_, ?_⟩
-    · refine List.nodup_flatMap.mpr ⟨fun j hj ↦ ?_, ?_⟩
-      · simp only [List.nodup_cons, List.mem_cons, List.not_mem_nil, or_false, not_or,
-          not_false_eq_true, List.nodup_nil, and_true]
-        refine ⟨⟨?_, ?_⟩, ?_⟩
-        · intro h; have := (cubicVarV_injective (List.mem_range.mp hj) (List.mem_range.mp hj)
-            (by omega) (by omega) h).2.2; omega
-        · intro h; have := (cubicVarV_injective (List.mem_range.mp hj) (List.mem_range.mp hj)
-            (by omega) (by omega) h).2.2; omega
-        · intro h; have := (cubicVarV_injective (List.mem_range.mp hj) (List.mem_range.mp hj)
-            (by omega) (by omega) h).2.2; omega
-      · refine List.pairwise_iff_getElem.mpr fun j₁ j₂ hj₁ hj₂ hlt x hx₁ hx₂ ↦ ?_
-        simp only [List.getElem_range, List.mem_cons, List.not_mem_nil, or_false] at hx₁ hx₂
-        have hj1 : j₁ < m := by rwa [List.length_range] at hj₁
-        have hj2 : j₂ < m := by rwa [List.length_range] at hj₂
-        rcases hx₁ with rfl | rfl | rfl <;> rcases hx₂ with h | h | h <;>
-          have := (cubicVarV_injective hj1 hj2 (by omega) (by omega) h).2.1 <;> omega
-    · refine List.pairwise_iff_getElem.mpr fun i₁ i₂ hi₁ hi₂ hlt x hx₁ hx₂ ↦ ?_
-      simp only [List.getElem_range, List.mem_flatMap, List.mem_range, List.mem_cons,
-        List.not_mem_nil, or_false] at hx₁ hx₂
-      rcases hx₁ with ⟨j₁, hj₁, rfl | rfl | rfl⟩ <;>
-        rcases hx₂ with ⟨j₂, hj₂, h | h | h⟩ <;>
-        have := (cubicVarV_injective hj₁ hj₂ (by omega) (by omega) h).1 <;> omega
-  · exact (List.nodup_range (n := m)).map fun j₁ j₂ h ↦ by unfold cubicClauseV at h; omega
-  · intro x hx₁ y hy₂ heq
-    subst heq
-    simp only [List.mem_flatMap, List.mem_range, List.mem_cons, List.not_mem_nil, or_false] at hx₁
-    simp only [List.mem_map, List.mem_range] at hy₂
-    rcases hy₂ with ⟨j, _, rfl⟩
-    rcases hx₁ with ⟨i, _, k, _, h | h | h⟩ <;> dsimp only [cubicVarV, cubicClauseV] at h <;> omega
+private abbrev encLit : (ℕ × Bool) ↪ List Bool := encPair encNat encBool
+private abbrev encLitList : List (ℕ × Bool) ↪ List Bool := encList encLit
 
-private lemma mem_baseGraphOf_vertices {vars : List ℕ} {clauses : CNF ℕ} {w : ℕ} :
-    w ∈ (baseGraphOf vars clauses).vertices ↔
-      (∃ i < vars.length, ∃ j < clauses.length, ∃ r < 3, w = cubicVarV clauses.length i j r) ∨
-      (∃ j < clauses.length, w = cubicClauseV j) := by
-  unfold baseGraphOf
-  simp only [polyRange_eq_range, List.mem_append, List.mem_flatMap, List.mem_range,
-    List.mem_cons, List.not_mem_nil, or_false, List.mem_map]
-  constructor
-  · rintro (⟨i, hi, j, hj, rfl | rfl | rfl⟩ | ⟨j, hj, rfl⟩)
-    · exact Or.inl ⟨i, hi, j, hj, 0, by omega, rfl⟩
-    · exact Or.inl ⟨i, hi, j, hj, 1, by omega, rfl⟩
-    · exact Or.inl ⟨i, hi, j, hj, 2, by omega, rfl⟩
-    · exact Or.inr ⟨j, hj, rfl⟩
-  · rintro (⟨i, hi, j, hj, r, hr, rfl⟩ | ⟨j, hj, rfl⟩)
-    · left; refine ⟨i, hi, j, hj, ?_⟩; interval_cases r <;> simp
-    · right; exact ⟨j, hj, rfl⟩
+@[local fun_prop]
+private theorem computableInPolyTime_occSlots :
+    ComputableInPolyTime (fun p : List (ℕ × Bool) × ℕ ↦ occSlots p.1 p.2)
+      (encPair encLitList encNat) (encList encUnary) := by
+  unfold occSlots
+  refine filterWithInput (range.comp ((length_list encLit).comp (fst _ _))) ?_
+  have hget : ComputableInPolyTime
+      (fun q : (List (ℕ × Bool) × ℕ) × ℕ ↦ q.1.1.getD q.2 (0, false))
+      (encPair (encPair encLitList encNat) encUnary) encLit :=
+    listGetDWithInput ((fst _ _).comp (fst _ _)) (snd _ _) (0, false)
+  exact ((fst encNat encBool).comp hget).decide_eq' ((snd _ _).comp (fst _ _))
 
-private lemma baseGraphOf_adj_iff {vars : List ℕ} {clauses : CNF ℕ}
-    (_hm : 2 ≤ clauses.length) {u v : ℕ} :
-    (baseGraphOf vars clauses).toSimpleGraph.Adj u v ↔
-      (∃ i < vars.length, ∃ j < clauses.length,
-        (u = cubicVarV clauses.length i j 0 ∧ v = cubicVarV clauses.length i j 1) ∨
-        (u = cubicVarV clauses.length i j 1 ∧ v = cubicVarV clauses.length i j 0) ∨
-        (u = cubicVarV clauses.length i j 1 ∧ v = cubicVarV clauses.length i j 2) ∨
-        (u = cubicVarV clauses.length i j 2 ∧ v = cubicVarV clauses.length i j 1) ∨
-        (u = cubicVarV clauses.length i j 2 ∧
-          v = cubicVarV clauses.length i (if j + 1 < clauses.length then j + 1 else 0) 0) ∨
-        (u = cubicVarV clauses.length i (if j + 1 < clauses.length then j + 1 else 0) 0 ∧
-          v = cubicVarV clauses.length i j 2)) ∨
-      (∃ i < vars.length, ∃ j < clauses.length,
-        ((vars.getD i 0, true) ∈ clauses.getD j [] ∧
-          ((u = cubicClauseV j ∧ v = cubicVarV clauses.length i j 0) ∨
-           (u = cubicVarV clauses.length i j 0 ∧ v = cubicClauseV j))) ∨
-        ((vars.getD i 0, false) ∈ clauses.getD j [] ∧
-          ((u = cubicClauseV j ∧ v = cubicVarV clauses.length i j 1) ∨
-           (u = cubicVarV clauses.length i j 1 ∧ v = cubicClauseV j)))) := by
-  have hmem_e : ∀ a b : ℕ, (a, b) ∈ (baseGraphOf vars clauses).edges ↔
-      (∃ i < vars.length, ∃ j < clauses.length,
-        (a = cubicVarV clauses.length i j 0 ∧ b = cubicVarV clauses.length i j 1) ∨
-        (a = cubicVarV clauses.length i j 1 ∧ b = cubicVarV clauses.length i j 2) ∨
-        (a = cubicVarV clauses.length i j 2 ∧
-          b = cubicVarV clauses.length i (if j + 1 < clauses.length then j + 1 else 0) 0)) ∨
-      (∃ i < vars.length, ∃ j < clauses.length,
-        ((vars.getD i 0, true) ∈ clauses.getD j [] ∧
-          a = cubicClauseV j ∧ b = cubicVarV clauses.length i j 0) ∨
-        ((vars.getD i 0, false) ∈ clauses.getD j [] ∧
-          a = cubicClauseV j ∧ b = cubicVarV clauses.length i j 1)) := by
-    intro a b; unfold baseGraphOf
-    simp only [polyRange_eq_range, List.mem_append, List.mem_flatMap, List.mem_range,
-      List.mem_cons, List.not_mem_nil, or_false, Prod.mk.injEq]
-    constructor
-    · rintro (⟨i, hi, j, hj, h | h | h⟩ | ⟨i, hi, j, hj, h⟩)
-      · exact Or.inl ⟨i, hi, j, hj, Or.inl h⟩
-      · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inl h)⟩
-      · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr h)⟩
-      · rcases h with h1 | h2
-        · split_ifs at h1 with hlt
-          · simp only [List.mem_singleton, Prod.mk.injEq] at h1
-            obtain ⟨l, hl, hEq⟩ := List.any_eq_true.mp hlt
-            rw [decide_eq_true_eq] at hEq; subst hEq
-            exact Or.inr ⟨i, hi, j, hj, Or.inl ⟨hl, h1⟩⟩
-          · simp at h1
-        · split_ifs at h2 with hlt
-          · simp only [List.mem_singleton, Prod.mk.injEq] at h2
-            obtain ⟨l, hl, hEq⟩ := List.any_eq_true.mp hlt
-            rw [decide_eq_true_eq] at hEq; subst hEq
-            exact Or.inr ⟨i, hi, j, hj, Or.inr ⟨hl, h2⟩⟩
-          · simp at h2
-    · rintro (⟨i, hi, j, hj, h | h | h⟩ | ⟨i, hi, j, hj, ⟨hl, ha, hb⟩ | ⟨hl, ha, hb⟩⟩)
-      · exact Or.inl ⟨i, hi, j, hj, Or.inl h⟩
-      · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inl h)⟩
-      · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr h)⟩
-      · right; refine ⟨i, hi, j, hj, Or.inl ?_⟩
-        have hlt : (clauses.getD j []).any (fun l ↦ decide (l = (vars.getD i 0, true))) = true :=
-          List.any_eq_true.mpr ⟨_, hl, by simp⟩
-        simp only [hlt, ↓reduceIte, List.mem_singleton, ha, hb]
-      · right; refine ⟨i, hi, j, hj, Or.inr ?_⟩
-        have hlt : (clauses.getD j []).any (fun l ↦ decide (l = (vars.getD i 0, false))) = true :=
-          List.any_eq_true.mpr ⟨_, hl, by simp⟩
-        simp only [hlt, ↓reduceIte, List.mem_singleton, ha, hb]
-  rw [Graph.toSimpleGraph_adj, hmem_e u v, hmem_e v u]
-  constructor
-  · rintro ⟨_, h⟩
-    rcases h with (⟨i, hi, j, hj, h | h | h⟩ | ⟨i, hi, j, hj, h | h⟩) |
-        (⟨i, hi, j, hj, h | h | h⟩ | ⟨i, hi, j, hj, h | h⟩)
-    · exact Or.inl ⟨i, hi, j, hj, Or.inl h⟩
-    · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inl h))⟩
-    · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h))))⟩
-    · exact Or.inr ⟨i, hi, j, hj, Or.inl ⟨h.1, Or.inl h.2⟩⟩
-    · exact Or.inr ⟨i, hi, j, hj, Or.inr ⟨h.1, Or.inl h.2⟩⟩
-    · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inl ⟨h.2, h.1⟩)⟩
-    · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inr (Or.inl ⟨h.2, h.1⟩)))⟩
-    · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨h.2, h.1⟩))))⟩
-    · exact Or.inr ⟨i, hi, j, hj, Or.inl ⟨h.1, Or.inr ⟨h.2.2, h.2.1⟩⟩⟩
-    · exact Or.inr ⟨i, hi, j, hj, Or.inr ⟨h.1, Or.inr ⟨h.2.2, h.2.1⟩⟩⟩
-  · intro h
-    have hne : u ≠ v := by
-      rcases h with ⟨i, _, j, hj, h | h | h | h | h | h⟩ |
-          ⟨i, _, j, _, ⟨_, h | h⟩ | ⟨_, h | h⟩⟩
-      all_goals
-        rcases h with ⟨rfl, rfl⟩
-        dsimp only [cubicVarV, cubicClauseV]
-        omega
-    refine ⟨hne, ?_⟩
-    rcases h with ⟨i, hi, j, hj, h | h | h | h | h | h⟩ |
-        ⟨i, hi, j, hj, ⟨hl, h | h⟩ | ⟨hl, h | h⟩⟩
-    · exact Or.inl (Or.inl ⟨i, hi, j, hj, Or.inl h⟩)
-    · exact Or.inr (Or.inl ⟨i, hi, j, hj, Or.inl ⟨h.2, h.1⟩⟩)
-    · exact Or.inl (Or.inl ⟨i, hi, j, hj, Or.inr (Or.inl h)⟩)
-    · exact Or.inr (Or.inl ⟨i, hi, j, hj, Or.inr (Or.inl ⟨h.2, h.1⟩)⟩)
-    · exact Or.inl (Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr h)⟩)
-    · exact Or.inr (Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr ⟨h.2, h.1⟩)⟩)
-    · exact Or.inl (Or.inr ⟨i, hi, j, hj, Or.inl ⟨hl, h⟩⟩)
-    · exact Or.inr (Or.inr ⟨i, hi, j, hj, Or.inl ⟨hl, h.2, h.1⟩⟩)
-    · exact Or.inl (Or.inr ⟨i, hi, j, hj, Or.inr ⟨hl, h⟩⟩)
-    · exact Or.inr (Or.inr ⟨i, hi, j, hj, Or.inr ⟨hl, h.2, h.1⟩⟩)
+@[local fun_prop]
+private theorem computableInPolyTime_nextSlot :
+    ComputableInPolyTime (fun p : List (ℕ × Bool) × ℕ ↦ nextSlot p.1 p.2)
+      (encPair encLitList encUnary) encUnary := by
+  have hlit : ComputableInPolyTime
+      (fun p : List (ℕ × Bool) × ℕ ↦ p.1.getD p.2 (0, false))
+      (encPair encLitList encUnary) encLit :=
+    listGetDWithInput (fst _ _) (snd _ _) (0, false)
+  have hocc : ComputableInPolyTime
+      (fun p : List (ℕ × Bool) × ℕ ↦ occSlots p.1 (p.1.getD p.2 (0, false)).1)
+      (encPair encLitList encUnary) (encList encUnary) :=
+    computableInPolyTime_occSlots.comp ((fst _ _).prod ((fst encNat encBool).comp hlit))
+  have hidx : ComputableInPolyTime
+      (fun p : List (ℕ × Bool) × ℕ ↦ (occSlots p.1 (p.1.getD p.2 (0, false)).1).idxOf p.2)
+      (encPair encLitList encUnary) encUnary :=
+    idxOfWithInput hocc (snd _ _)
+  have hlen : ComputableInPolyTime
+      (fun p : List (ℕ × Bool) × ℕ ↦ (occSlots p.1 (p.1.getD p.2 (0, false)).1).length)
+      (encPair encLitList encUnary) encUnary :=
+    (length_list encUnary).comp hocc
+  have hcond : ComputableInPolyTime
+      (fun p : List (ℕ × Bool) × ℕ ↦
+        decide ((occSlots p.1 (p.1.getD p.2 (0, false)).1).idxOf p.2 + 1 <
+          (occSlots p.1 (p.1.getD p.2 (0, false)).1).length))
+      (encPair encLitList encUnary) encBool := by
+    have hadd : ComputableInPolyTime
+        (fun p : List (ℕ × Bool) × ℕ ↦
+          (occSlots p.1 (p.1.getD p.2 (0, false)).1).idxOf p.2 + 1)
+        (encPair encLitList encUnary) encUnary :=
+      unary_add.comp (hidx.prod (const 1))
+    exact unary_lt.comp (hadd.prod hlen)
+  have hthen : ComputableInPolyTime
+      (fun p : List (ℕ × Bool) × ℕ ↦
+        (occSlots p.1 (p.1.getD p.2 (0, false)).1).getD
+          ((occSlots p.1 (p.1.getD p.2 (0, false)).1).idxOf p.2 + 1) 0)
+      (encPair encLitList encUnary) encUnary :=
+    listGetDWithInput hocc (unary_add.comp (hidx.prod (const 1))) 0
+  have helse : ComputableInPolyTime
+      (fun p : List (ℕ × Bool) × ℕ ↦
+        (occSlots p.1 (p.1.getD p.2 (0, false)).1).getD 0 0)
+      (encPair encLitList encUnary) encUnary :=
+    listGetDWithInput hocc (const 0) 0
+  have heq : (fun p : List (ℕ × Bool) × ℕ ↦ nextSlot p.1 p.2) =
+      fun p ↦ if decide ((occSlots p.1 (p.1.getD p.2 (0, false)).1).idxOf p.2 + 1 <
+        (occSlots p.1 (p.1.getD p.2 (0, false)).1).length)
+      then (occSlots p.1 (p.1.getD p.2 (0, false)).1).getD
+        ((occSlots p.1 (p.1.getD p.2 (0, false)).1).idxOf p.2 + 1) 0
+      else (occSlots p.1 (p.1.getD p.2 (0, false)).1).getD 0 0 := by
+    funext p; simp [nextSlot]
+  rw [heq]
+  exact ite hcond hthen helse
 
-private lemma baseGraphOf_degree_bounds {vars : List ℕ} {clauses : CNF ℕ}
-    (hnd : vars.Nodup) (hm : 2 ≤ clauses.length)
-    (hcl_pos : ∀ c ∈ clauses, 0 < c.length)
-    (hcl_le : ∀ c ∈ clauses, c.length ≤ 3)
-    (hcl_nd : ∀ c ∈ clauses, c.Nodup)
-    (hcl_vars : ∀ c ∈ clauses, ∀ l ∈ c, l.1 ∈ vars)
-    {u : ℕ} (hu : u ∈ (baseGraphOf vars clauses).vertices) :
-    1 ≤ cubicGraphDegBool (baseGraphOf vars clauses) u ∧
-      cubicGraphDegBool (baseGraphOf vars clauses) u ≤ 3 := by
-  classical
-  let B := baseGraphOf vars clauses
-  have hdeg_card : cubicGraphDegBool B u =
-      (B.vertices.toFinset.filter fun w ↦ B.toSimpleGraph.Adj u w).card := by
-    rw [cubicGraphDegBool_eq_degree B ⟨u, hu⟩, ← _root_.SimpleGraph.card_neighborFinset_eq_degree,
-      _root_.SimpleGraph.neighborFinset_eq_filter]
-    refine Finset.card_bij (fun x _ ↦ x.1) (fun x hx ↦ ?_)
-      (fun _ _ _ _ h ↦ Subtype.ext h) (fun w hw ↦ ?_)
-    · exact Finset.mem_filter.mpr ⟨List.mem_toFinset.mpr x.2, (Finset.mem_filter.mp hx).2⟩
-    · rcases Finset.mem_filter.mp hw with ⟨hwV, hadj⟩
-      exact ⟨⟨w, List.mem_toFinset.mp hwV⟩, Finset.mem_filter.mpr ⟨Finset.mem_univ _, hadj⟩, rfl⟩
-  rw [hdeg_card]
-  rcases mem_baseGraphOf_vertices.mp hu with ⟨i, hi, j, hj, r, hr, rfl⟩ | ⟨j, hj, rfl⟩
-  · set m := clauses.length
-    have hnb_sub : ∀ (A : Finset ℕ),
-        (∀ w, B.toSimpleGraph.Adj (cubicVarV m i j r) w ↔ w ∈ A) →
-        (∀ w ∈ A, w ∈ B.vertices) →
-        (B.vertices.toFinset.filter fun w ↦ B.toSimpleGraph.Adj (cubicVarV m i j r) w) = A := by
-      intro A hA hAV; ext w; simp only [Finset.mem_filter, List.mem_toFinset]
-      exact ⟨fun ⟨_, h⟩ ↦ (hA w).mp h, fun hw ↦ ⟨hAV w hw, (hA w).mpr hw⟩⟩
-    interval_cases r
-    · let jprev := if j = 0 then m - 1 else j - 1
-      have hjprev : jprev < m := by dsimp only [jprev]; split_ifs <;> omega
-      have hnext_prev : (if jprev + 1 < m then jprev + 1 else 0) = j := by
-        dsimp only [jprev]; split_ifs <;> omega
-      have hne_12 : cubicVarV m i j 1 ≠ cubicVarV m i jprev 2 := by
-        intro h; have := (cubicVarV_injective hj hjprev (by omega) (by omega) h).2.2; omega
-      have hne_1c : cubicVarV m i j 1 ≠ cubicClauseV j := by unfold cubicVarV cubicClauseV; omega
-      have hne_2c : cubicVarV m i jprev 2 ≠ cubicClauseV j := by
-        unfold cubicVarV cubicClauseV; omega
-      let baseN : Finset ℕ := {cubicVarV m i j 1, cubicVarV m i jprev 2}
-      let fullN : Finset ℕ :=
-        if (vars.getD i 0, true) ∈ clauses.getD j [] then insert (cubicClauseV j) baseN else baseN
-      have heq : (B.vertices.toFinset.filter fun w ↦
-          B.toSimpleGraph.Adj (cubicVarV m i j 0) w) = fullN := by
-        refine hnb_sub fullN (fun w ↦ ?_) (fun w hw ↦ ?_)
-        · rw [baseGraphOf_adj_iff hm]
-          constructor
-          · rintro (⟨i', hi', j', hj', h | h | h | h | h | h⟩ |
-                ⟨i', hi', j', hj', ⟨hl, h | h⟩ | ⟨hl, h | h⟩⟩)
-            all_goals
-              try (have h1 := cubicVarV_injective hj hj' (by omega) (by omega) h.1; omega)
-              try (have h1 :=
-                cubicVarV_injective hj (by split_ifs <;> omega) (by omega) (by omega) h.1; omega)
-              try (dsimp only [cubicVarV, cubicClauseV] at h; omega)
-            · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-              rw [h.2]; dsimp only [fullN, baseN, m]; split_ifs <;> simp
-            · rcases cubicVarV_injective hj (by split_ifs <;> omega) (by omega) (by omega) h.1 with
-                ⟨rfl, hj_eq, _⟩
-              have hj'_eq : j' = jprev := by dsimp only [jprev]; split_ifs at hj_eq ⊢ <;> omega
-              subst hj'_eq
-              rw [h.2]; dsimp only [fullN, baseN, m]; split_ifs <;> simp
-            · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-              rw [h.2]; dsimp only [fullN]; simp only [hl, ↓reduceIte, Finset.mem_insert, true_or]
-          · intro hw; dsimp only [fullN, baseN] at hw
-            by_cases hmem : (vars.getD i 0, true) ∈ clauses.getD j []
-            · simp only [hmem, ite_true, Finset.mem_insert, Finset.mem_singleton] at hw
-              rcases hw with rfl | rfl | rfl
-              · exact Or.inr ⟨i, hi, j, hj, Or.inl ⟨hmem, Or.inr ⟨rfl, rfl⟩⟩⟩
-              · exact Or.inl ⟨i, hi, j, hj, Or.inl ⟨rfl, rfl⟩⟩
-              · exact Or.inl ⟨i, hi, jprev, hjprev,
-                  Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨by rw [hnext_prev], rfl⟩))))⟩
-            · simp only [hmem, ite_false, Finset.mem_insert, Finset.mem_singleton] at hw
-              rcases hw with rfl | rfl
-              · exact Or.inl ⟨i, hi, j, hj, Or.inl ⟨rfl, rfl⟩⟩
-              · exact Or.inl ⟨i, hi, jprev, hjprev,
-                  Or.inr (Or.inr (Or.inr (Or.inr (Or.inr ⟨by rw [hnext_prev], rfl⟩))))⟩
-        · dsimp only [fullN, baseN] at hw
-          split_ifs at hw <;> simp only [Finset.mem_insert, Finset.mem_singleton] at hw
-          · rcases hw with rfl | rfl | rfl
-            · exact mem_baseGraphOf_vertices.mpr (.inr ⟨j, hj, rfl⟩)
-            · exact mem_baseGraphOf_vertices.mpr (.inl ⟨i, hi, j, hj, 1, by omega, rfl⟩)
-            · exact mem_baseGraphOf_vertices.mpr (.inl ⟨i, hi, jprev, hjprev, 2, by omega, rfl⟩)
-          · rcases hw with rfl | rfl
-            · exact mem_baseGraphOf_vertices.mpr (.inl ⟨i, hi, j, hj, 1, by omega, rfl⟩)
-            · exact mem_baseGraphOf_vertices.mpr (.inl ⟨i, hi, jprev, hjprev, 2, by omega, rfl⟩)
-      rw [heq]; dsimp only [fullN, baseN]
-      split_ifs
-      · rw [Finset.card_insert_of_notMem (by simp [hne_1c.symm, hne_2c.symm]),
-          Finset.card_pair hne_12]; omega
-      · rw [Finset.card_pair hne_12]; omega
-    · have hne_02 : cubicVarV m i j 0 ≠ cubicVarV m i j 2 := by
-        intro h; have := (cubicVarV_injective hj hj (by omega) (by omega) h).2.2; omega
-      have hne_0c : cubicVarV m i j 0 ≠ cubicClauseV j := by unfold cubicVarV cubicClauseV; omega
-      have hne_2c : cubicVarV m i j 2 ≠ cubicClauseV j := by unfold cubicVarV cubicClauseV; omega
-      let baseN : Finset ℕ := {cubicVarV m i j 0, cubicVarV m i j 2}
-      let fullN : Finset ℕ :=
-        if (vars.getD i 0, false) ∈ clauses.getD j [] then insert (cubicClauseV j) baseN else baseN
-      have heq : (B.vertices.toFinset.filter fun w ↦
-          B.toSimpleGraph.Adj (cubicVarV m i j 1) w) = fullN := by
-        refine hnb_sub fullN (fun w ↦ ?_) (fun w hw ↦ ?_)
-        · rw [baseGraphOf_adj_iff hm]
-          constructor
-          · rintro (⟨i', hi', j', hj', h | h | h | h | h | h⟩ |
-                ⟨i', hi', j', hj', ⟨hl, h | h⟩ | ⟨hl, h | h⟩⟩)
-            all_goals
-              try (have h1 := cubicVarV_injective hj hj' (by omega) (by omega) h.1; omega)
-              try (have h1 :=
-                cubicVarV_injective hj (by split_ifs <;> omega) (by omega) (by omega) h.1; omega)
-              try (dsimp only [cubicVarV, cubicClauseV] at h; omega)
-            · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-              rw [h.2]; dsimp only [fullN, baseN, m]; split_ifs <;> simp
-            · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-              rw [h.2]; dsimp only [fullN, baseN, m]; split_ifs <;> simp
-            · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-              rw [h.2]; dsimp only [fullN]; simp only [hl, ↓reduceIte, Finset.mem_insert, true_or]
-          · intro hw; dsimp only [fullN, baseN] at hw
-            by_cases hmem : (vars.getD i 0, false) ∈ clauses.getD j []
-            · simp only [hmem, ite_true, Finset.mem_insert, Finset.mem_singleton] at hw
-              rcases hw with rfl | rfl | rfl
-              · exact Or.inr ⟨i, hi, j, hj, Or.inr ⟨hmem, Or.inr ⟨rfl, rfl⟩⟩⟩
-              · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩
-              · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inl ⟨rfl, rfl⟩))⟩
-            · simp only [hmem, ite_false, Finset.mem_insert, Finset.mem_singleton] at hw
-              rcases hw with rfl | rfl
-              · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩
-              · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inl ⟨rfl, rfl⟩))⟩
-        · dsimp only [fullN, baseN] at hw
-          split_ifs at hw <;> simp only [Finset.mem_insert, Finset.mem_singleton] at hw
-          · rcases hw with rfl | rfl | rfl
-            · exact mem_baseGraphOf_vertices.mpr (Or.inr ⟨j, hj, rfl⟩)
-            · exact mem_baseGraphOf_vertices.mpr (Or.inl ⟨i, hi, j, hj, 0, by omega, rfl⟩)
-            · exact mem_baseGraphOf_vertices.mpr (Or.inl ⟨i, hi, j, hj, 2, by omega, rfl⟩)
-          · rcases hw with rfl | rfl
-            · exact mem_baseGraphOf_vertices.mpr (Or.inl ⟨i, hi, j, hj, 0, by omega, rfl⟩)
-            · exact mem_baseGraphOf_vertices.mpr (Or.inl ⟨i, hi, j, hj, 2, by omega, rfl⟩)
-      rw [heq]; dsimp only [fullN, baseN]
-      split_ifs
-      · rw [Finset.card_insert_of_notMem (by simp [hne_0c.symm, hne_2c.symm]),
-          Finset.card_pair hne_02]; omega
-      · rw [Finset.card_pair hne_02]; omega
-    · let jnext := if j + 1 < m then j + 1 else 0
-      have hjnext : jnext < m := by dsimp only [jnext]; split_ifs <;> omega
-      have hne_10 : cubicVarV m i j 1 ≠ cubicVarV m i jnext 0 := by
-        intro h; have := (cubicVarV_injective hj hjnext (by omega) (by omega) h).2.2; omega
-      have heq : (B.vertices.toFinset.filter fun w ↦
-          B.toSimpleGraph.Adj (cubicVarV m i j 2) w) =
-          ({cubicVarV m i j 1, cubicVarV m i jnext 0} : Finset ℕ) := by
-        refine hnb_sub _ (fun w ↦ ?_) (fun w hw ↦ ?_)
-        · rw [baseGraphOf_adj_iff hm]
-          constructor
-          · rintro (⟨i', hi', j', hj', h | h | h | h | h | h⟩ |
-                ⟨i', hi', j', hj', ⟨_, h | h⟩ | ⟨_, h | h⟩⟩)
-            all_goals
-              try (have h1 := cubicVarV_injective hj hj' (by omega) (by omega) h.1; omega)
-              try (have h1 :=
-                cubicVarV_injective hj (by split_ifs <;> omega) (by omega) (by omega) h.1; omega)
-              try (dsimp only [cubicVarV, cubicClauseV] at h; omega)
-            · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-              simp [h.2, m]
-            · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-              simp [h.2, jnext, m]
-          · intro hw; simp only [Finset.mem_insert, Finset.mem_singleton] at hw
-            rcases hw with rfl | rfl
-            · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, rfl⟩)))⟩
-            · exact Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, rfl⟩))))⟩
-        · simp only [Finset.mem_insert, Finset.mem_singleton] at hw
-          rcases hw with rfl | rfl
-          · exact mem_baseGraphOf_vertices.mpr (Or.inl ⟨i, hi, j, hj, 1, by omega, rfl⟩)
-          · exact mem_baseGraphOf_vertices.mpr (Or.inl ⟨i, hi, jnext, hjnext, 0, by omega, rfl⟩)
-      rw [heq, Finset.card_pair hne_10]; omega
-  · set m := clauses.length
-    have hcj_mem : clauses.getD j [] ∈ clauses := by
-      rw [list_getD_eq _ _ hj]; exact List.getElem_mem hj
-    let imgLit : ℕ × Bool → ℕ := fun l ↦ cubicVarV m (vars.idxOf l.1) j (if l.2 then 0 else 1)
-    have hmap_eq : (B.vertices.toFinset.filter fun w ↦ B.toSimpleGraph.Adj (cubicClauseV j) w) =
-        (clauses.getD j []).toFinset.image imgLit := by
-      ext w; simp only [Finset.mem_filter, List.mem_toFinset, Finset.mem_image]
-      constructor
-      · rintro ⟨_, hadj⟩
-        rw [baseGraphOf_adj_iff hm] at hadj
-        rcases hadj with ⟨i, _, j', _, h | h | h | h | h | h⟩ |
-            ⟨i, hi, j', hj', ⟨hl, h | h⟩ | ⟨hl, h | h⟩⟩
-        all_goals try (dsimp only [cubicVarV, cubicClauseV] at h; omega)
-        · have hj_eq : j' = j := by unfold cubicClauseV at h; omega
-          subst hj_eq
-          refine ⟨(vars.getD i 0, true), hl, ?_⟩
-          have hidx : vars.idxOf (vars.getD i 0) = i := by
-            rw [list_getD_eq _ _ hi]; exact List.Nodup.idxOf_getElem hnd i hi
-          dsimp only [imgLit, m]; rw [hidx, h.2]; rfl
-        · have hj_eq : j' = j := by unfold cubicClauseV at h; omega
-          subst hj_eq
-          refine ⟨(vars.getD i 0, false), hl, ?_⟩
-          have hidx : vars.idxOf (vars.getD i 0) = i := by
-            rw [list_getD_eq _ _ hi]; exact List.Nodup.idxOf_getElem hnd i hi
-          dsimp only [imgLit, m]; rw [hidx, h.2]; rfl
-      · rintro ⟨⟨v, b⟩, hl, rfl⟩
-        have hv : v ∈ vars := hcl_vars _ hcj_mem _ hl
-        have hi : vars.idxOf v < vars.length := List.idxOf_lt_length_iff.mpr hv
-        have hget : vars.getD (vars.idxOf v) 0 = v := by
-          rw [list_getD_eq _ _ hi, List.getElem_idxOf]
-        refine ⟨mem_baseGraphOf_vertices.mpr
-            (Or.inl ⟨vars.idxOf v, hi, j, hj, if b then 0 else 1, by split_ifs <;> omega, rfl⟩),
-            ?_⟩
-        rw [baseGraphOf_adj_iff hm]
-        cases b
-        · exact Or.inr ⟨vars.idxOf v, hi, j, hj,
-            Or.inr ⟨by rw [hget]; exact hl, Or.inl ⟨rfl, rfl⟩⟩⟩
-        · exact Or.inr ⟨vars.idxOf v, hi, j, hj,
-            Or.inl ⟨by rw [hget]; exact hl, Or.inl ⟨rfl, rfl⟩⟩⟩
-    rw [hmap_eq]
-    have hinj : Set.InjOn imgLit ((clauses.getD j []).toFinset : Set (ℕ × Bool)) := by
-      intro l₁ hl₁ l₂ hl₂ heq
-      have hi1 := List.idxOf_lt_length_iff.mpr (hcl_vars _ hcj_mem _ (List.mem_toFinset.mp hl₁))
-      have hi2 := List.idxOf_lt_length_iff.mpr (hcl_vars _ hcj_mem _ (List.mem_toFinset.mp hl₂))
-      have hres := cubicVarV_injective hj hj (by split_ifs <;> omega) (by split_ifs <;> omega) heq
-      have hv_eq : l₁.1 = l₂.1 := by
-        have := congrArg (fun k ↦ vars.getD k 0) hres.1
-        rwa [list_getD_eq _ _ hi1, list_getD_eq _ _ hi2,
-          List.getElem_idxOf, List.getElem_idxOf] at this
-      have hb_eq : l₁.2 = l₂.2 := by
-        have := hres.2.2; cases h₁ : l₁.2 <;> cases h₂ : l₂.2 <;> simp_all
-      exact Prod.ext hv_eq hb_eq
-    rw [Finset.card_image_of_injOn hinj, List.toFinset_card_of_nodup (hcl_nd _ hcj_mem)]
-    exact ⟨hcl_pos _ hcj_mem, hcl_le _ hcj_mem⟩
+@[local fun_prop]
+private theorem computableInPolyTime_negPort :
+    ComputableInPolyTime (fun p : List (ℕ × Bool) × ℕ ↦ negPort p.1 p.2)
+      (encPair encLitList encUnary) encUnary := by
+  unfold negPort
+  have hlit : ComputableInPolyTime
+      (fun p : List (ℕ × Bool) × ℕ ↦ p.1.getD p.2 (0, false))
+      (encPair encLitList encUnary) encLit :=
+    listGetDWithInput (fst _ _) (snd _ _) (0, false)
+  exact ite ((snd encNat encBool).comp hlit) (const 2) (const 1)
 
-private lemma normClauses_mem_vars {φ : CNF ℕ} {j : ℕ} {v : ℕ} {b : Bool}
-    (hj : j < (normClauses φ).length) (hl : (v, b) ∈ (normClauses φ).getD j []) :
-    v ∈ dedupList φ.vars := by
-  let vars := dedupList φ.vars
-  rw [list_getD_eq _ _ hj] at hl
-  simp only [normClauses] at hl
-  by_cases hjφ : j < φ.length
-  · rw [List.getElem_append_left (by simp [hjφ]), List.getElem_map] at hl
-    exact mem_dedupList.mpr
-      (CNF.mem_vars.mpr ⟨φ[j], List.getElem_mem hjφ, b, mem_dedupList.mp hl⟩)
-  · rw [List.getElem_append_right (by simp; omega), List.getElem_map] at hl
-    simp only [polyRange_eq_range, List.getElem_range] at hl
-    have hi : j - φ.length < vars.length := by
-      have : (normClauses φ).length = φ.length + vars.length := by
-        simp [normClauses, polyRange_eq_range, vars]
-      omega
-    have hi2 : (if j - φ.length + 1 < vars.length then j - φ.length + 1 else 0) < vars.length := by
-      split_ifs <;> omega
-    have hl' := mem_dedupList.mp hl
-    simp only [List.length_map, List.mem_cons, List.not_mem_nil, or_false, Prod.mk.injEq] at hl' ⊢
-    rcases hl' with ⟨rfl, _⟩ | ⟨rfl, _⟩ | ⟨rfl, _⟩
-    · rw [list_getD_eq _ _ hi]; exact List.getElem_mem hi
-    · rw [list_getD_eq _ _ hi]; exact List.getElem_mem hi
-    · rw [list_getD_eq _ _ hi2]; exact List.getElem_mem hi2
+@[local fun_prop]
+private theorem computableInPolyTime_posBinPort :
+    ComputableInPolyTime (fun p : List (ℕ × Bool) × ℕ ↦ posBinPort p.1 p.2)
+      (encPair encLitList encUnary) encUnary := by
+  unfold posBinPort
+  have hlit : ComputableInPolyTime
+      (fun p : List (ℕ × Bool) × ℕ ↦ p.1.getD p.2 (0, false))
+      (encPair encLitList encUnary) encLit :=
+    listGetDWithInput (fst _ _) (snd _ _) (0, false)
+  exact ite ((snd encNat encBool).comp hlit) (const 1) (const 2)
 
-private lemma nontrivial_vars_clauses {φ : CNF ℕ} (hvalid : isNontrivialThreeCNF φ = true) :
-    0 < (dedupList φ.vars).length ∧ 2 ≤ (normClauses φ).length := by
-  simp only [isNontrivialThreeCNF, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hvalid
-  obtain ⟨c, hc⟩ := List.exists_mem_of_ne_nil φ (List.ne_nil_of_length_pos hvalid.1)
-  obtain ⟨l, hl⟩ := List.exists_mem_of_ne_nil c (List.ne_nil_of_length_pos (hvalid.2 c hc).1)
-  have h1 : 0 < (dedupList φ.vars).length :=
-    List.length_pos_of_mem (mem_dedupList.mpr (CNF.mem_vars.mpr ⟨c, hc, l.2, hl⟩))
-  have h2 : (normClauses φ).length = φ.length + (dedupList φ.vars).length := by
-    simp [normClauses, polyRange_eq_range]
-  exact ⟨h1, by omega⟩
+@[local fun_prop]
+private theorem computableInPolyTime_gadVert_unary :
+    ComputableInPolyTime (fun p : ℕ × ℕ ↦ gadVert p.1 p.2)
+      (encPair encUnary encUnary) encNat := by
+  unfold gadVert
+  exact unary_to_binary.comp (by fun_prop)
 
-private lemma baseGraphOf_dom_iff {φ : CNF ℕ}
-    (hvalid : isNontrivialThreeCNF φ = true) :
-    let vars := dedupList φ.vars
-    let clauses := normClauses φ
-    let B := baseGraphOf vars clauses
-    (∃ D : Finset ℕ, (∀ v ∈ D, v ∈ B.vertices) ∧
-      (∀ v ∈ B.vertices, v ∈ D ∨ ∃ w ∈ D, B.toSimpleGraph.Adj v w) ∧
-      D.card ≤ vars.length * clauses.length) ↔ φ.Satisfiable := by
-  classical
-  intro vars clauses B
-  have hnd : vars.Nodup := nodup_dedupList φ.vars
-  obtain ⟨hvars_pos, hm⟩ := nontrivial_vars_clauses hvalid
-  set n := vars.length; set m := clauses.length
-  constructor
-  · rintro ⟨D, hDB, hDdom, hDcard⟩
-    let bSet (i j : ℕ) : Finset ℕ :=
-      {cubicVarV m i j 1, cubicVarV m i j 2,
-        cubicVarV m i (if j + 1 < m then j + 1 else 0) 0}
-    let idxSet : Finset (ℕ × ℕ) := (List.range n).toFinset ×ˢ (List.range m).toFinset
-    have hb_nonempty : ∀ p ∈ idxSet, (D ∩ bSet p.1 p.2).Nonempty := by
-      rintro ⟨i, j⟩ hp
-      simp only [idxSet, Finset.mem_product, List.mem_toFinset, List.mem_range] at hp
-      rcases hp with ⟨hi, hj⟩
-      have h2V : cubicVarV m i j 2 ∈ B.vertices :=
-        mem_baseGraphOf_vertices.mpr (Or.inl ⟨i, hi, j, hj, 2, by omega, rfl⟩)
-      rcases hDdom _ h2V with hmem | ⟨w, hwD, hadj⟩
-      · exact ⟨_, Finset.mem_inter.mpr ⟨hmem, by simp [bSet]⟩⟩
-      · rw [baseGraphOf_adj_iff hm] at hadj
-        rcases hadj with ⟨i', hi', j', hj', h | h | h | h | h | h⟩ |
-            ⟨i', _, j', _, ⟨_, h | h⟩ | ⟨_, h | h⟩⟩
-        all_goals
-          try (have h1 := cubicVarV_injective hj hj' (by omega) (by omega) h.1; omega)
-          try (have h1 :=
-            cubicVarV_injective hj (by split_ifs <;> omega) (by omega) (by omega) h.1; omega)
-          try (dsimp only [cubicVarV, cubicClauseV] at h; omega)
-        · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-          exact ⟨w, Finset.mem_inter.mpr ⟨hwD, by simp [bSet, h.2, m]⟩⟩
-        · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-          exact ⟨w, Finset.mem_inter.mpr ⟨hwD, by simp [bSet, h.2, m]⟩⟩
-    have hb_pw : (idxSet : Set (ℕ × ℕ)).PairwiseDisjoint fun p ↦ D ∩ bSet p.1 p.2 := by
-      intro ⟨i₁, j₁⟩ hp₁ ⟨i₂, j₂⟩ hp₂ hne
-      simp only [Finset.mem_coe, idxSet, Finset.mem_product, List.mem_toFinset,
-        List.mem_range] at hp₁ hp₂
-      refine Finset.disjoint_left.mpr fun w hw₁ hw₂ ↦ ?_
-      have h1 := (Finset.mem_inter.mp hw₁).2; have h2 := (Finset.mem_inter.mp hw₂).2
-      simp only [bSet, Finset.mem_insert, Finset.mem_singleton] at h1 h2
-      have hne_ab : ∀ {a b r₁ r₂}, a < m → b < m → r₁ < 3 → r₂ < 3 → r₁ ≠ r₂ →
-          cubicVarV m i₁ a r₁ ≠ cubicVarV m i₂ b r₂ := fun ha hb hr₁ hr₂ hne_r h ↦
-        hne_r (cubicVarV_injective ha hb hr₁ hr₂ h).2.2
-      have hj1' : (if j₁ + 1 < m then j₁ + 1 else 0) < m := by split_ifs <;> omega
-      have hj2' : (if j₂ + 1 < m then j₂ + 1 else 0) < m := by split_ifs <;> omega
-      have h12 : cubicVarV m i₁ j₁ 1 ≠ cubicVarV m i₂ j₂ 2 :=
-        hne_ab hp₁.2 hp₂.2 (by omega) (by omega) (by omega)
-      have h21 : cubicVarV m i₁ j₁ 2 ≠ cubicVarV m i₂ j₂ 1 :=
-        hne_ab hp₁.2 hp₂.2 (by omega) (by omega) (by omega)
-      have h10 : cubicVarV m i₁ j₁ 1 ≠ cubicVarV m i₂ (if j₂ + 1 < m then j₂ + 1 else 0) 0 :=
-        hne_ab hp₁.2 hj2' (by omega) (by omega) (by omega)
-      have h20 : cubicVarV m i₁ j₁ 2 ≠ cubicVarV m i₂ (if j₂ + 1 < m then j₂ + 1 else 0) 0 :=
-        hne_ab hp₁.2 hj2' (by omega) (by omega) (by omega)
-      have h01 : cubicVarV m i₁ (if j₁ + 1 < m then j₁ + 1 else 0) 0 ≠ cubicVarV m i₂ j₂ 1 :=
-        hne_ab hj1' hp₂.2 (by omega) (by omega) (by omega)
-      have h02 : cubicVarV m i₁ (if j₁ + 1 < m then j₁ + 1 else 0) 0 ≠ cubicVarV m i₂ j₂ 2 :=
-        hne_ab hj1' hp₂.2 (by omega) (by omega) (by omega)
-      have h11 : cubicVarV m i₁ j₁ 1 = cubicVarV m i₂ j₂ 1 → False := fun h ↦ by
-        have hr := cubicVarV_injective hp₁.2 hp₂.2 (by omega) (by omega) h
-        exact hne (Prod.ext hr.1 hr.2.1)
-      have h22 : cubicVarV m i₁ j₁ 2 = cubicVarV m i₂ j₂ 2 → False := fun h ↦ by
-        have hr := cubicVarV_injective hp₁.2 hp₂.2 (by omega) (by omega) h
-        exact hne (Prod.ext hr.1 hr.2.1)
-      have h00 : cubicVarV m i₁ (if j₁ + 1 < m then j₁ + 1 else 0) 0 =
-          cubicVarV m i₂ (if j₂ + 1 < m then j₂ + 1 else 0) 0 → False := fun h ↦ by
-        have hr := cubicVarV_injective hj1' hj2' (by omega) (by omega) h
-        have hj_eq : j₁ = j₂ := by have h' := hr.2.1; split_ifs at h' <;> omega
-        exact hne (Prod.ext hr.1 hj_eq)
-      rcases h1 with rfl | rfl | rfl <;> rcases h2 with h | h | h
-      · exact h11 h
-      · exact h12 h
-      · exact h10 h
-      · exact h21 h
-      · exact h22 h
-      · exact h20 h
-      · exact h01 h
-      · exact h02 h
-      · exact h00 h
-    let unionB : Finset ℕ := idxSet.biUnion fun p ↦ D ∩ bSet p.1 p.2
-    have hunionB_sub : unionB ⊆ D := Finset.biUnion_subset.mpr fun _ _ ↦ Finset.inter_subset_left
-    have hidx_card : idxSet.card = n * m := by
-      simp [idxSet, Finset.card_product, List.toFinset_card_of_nodup List.nodup_range]
-    have hcard_ge : n * m ≤ unionB.card := by
-      rw [Finset.card_biUnion hb_pw]
-      calc n * m = ∑ _ ∈ idxSet, 1 := by rw [Finset.sum_const, smul_eq_mul, mul_one, hidx_card]
-        _ ≤ ∑ p ∈ idxSet, (D ∩ bSet p.1 p.2).card :=
-            Finset.sum_le_sum fun p hp ↦ Finset.card_pos.mpr (hb_nonempty p hp)
-    have hD_eq : unionB = D := Finset.eq_of_subset_of_card_le hunionB_sub (hDcard.trans hcard_ge)
-    have hcard_each : ∀ p ∈ idxSet, (D ∩ bSet p.1 p.2).card = 1 := by
-      have hsum : ∑ p ∈ idxSet, (D ∩ bSet p.1 p.2).card = n * m := by
-        have h1 : unionB.card = n * m := by have := Finset.card_le_card hunionB_sub; omega
-        rwa [Finset.card_biUnion hb_pw] at h1
-      intro p hp
-      by_contra hne1
-      have hge2 : 2 ≤ (D ∩ bSet p.1 p.2).card := by
-        have := Finset.card_pos.mpr (hb_nonempty p hp); omega
-      have hsum_gt : n * m < ∑ q ∈ idxSet, (D ∩ bSet q.1 q.2).card := by
-        rw [← Finset.add_sum_erase _ _ hp]
-        have hrest : idxSet.card - 1 ≤ ∑ q ∈ idxSet.erase p, (D ∩ bSet q.1 q.2).card := by
-          calc idxSet.card - 1 = ∑ _ ∈ idxSet.erase p, 1 := by
-                rw [Finset.sum_const, smul_eq_mul, mul_one, Finset.card_erase_of_mem hp]
-            _ ≤ _ := Finset.sum_le_sum fun q hq ↦
-                Finset.card_pos.mpr (hb_nonempty q (Finset.mem_of_mem_erase hq))
-        rw [hidx_card] at hrest; omega
-      omega
-    have hno_clause : ∀ j < m, cubicClauseV j ∉ D := by
-      intro j _ hmem; rw [← hD_eq] at hmem
-      obtain ⟨⟨i, j'⟩, _, hw⟩ := Finset.mem_biUnion.mp hmem
-      have hg := (Finset.mem_inter.mp hw).2
-      simp only [bSet, Finset.mem_insert, Finset.mem_singleton] at hg
-      rcases hg with h | h | h <;> unfold cubicClauseV cubicVarV at h <;> omega
-    have hback_step : ∀ i < n, ∀ j < m,
-        cubicVarV m i (if j + 1 < m then j + 1 else 0) 0 ∈ D →
-        cubicVarV m i j 0 ∈ D := by
-      intro i hi j hj hnextD
-      have h1 := hcard_each (i, j) (by simp [idxSet, hi, hj])
-      have hnot1 : cubicVarV m i j 1 ∉ D := by
-        intro h1D
-        have hne : cubicVarV m i j 1 ≠ cubicVarV m i (if j + 1 < m then j + 1 else 0) 0 := by
-          intro h; have := (cubicVarV_injective hj (by split_ifs <;> omega)
-            (by omega) (by omega) h).2.2; omega
-        have hsub : ({cubicVarV m i j 1,
-            cubicVarV m i (if j + 1 < m then j + 1 else 0) 0} : Finset ℕ) ⊆ D ∩ bSet i j := by
-          intro z hz; simp only [Finset.mem_insert, Finset.mem_singleton] at hz
-          rcases hz with rfl | rfl
-          · exact Finset.mem_inter.mpr ⟨h1D, by simp [bSet]⟩
-          · exact Finset.mem_inter.mpr ⟨hnextD, by simp [bSet]⟩
-        have := Finset.card_le_card hsub; rw [Finset.card_pair hne] at this; dsimp only at h1; omega
-      have hnot2 : cubicVarV m i j 2 ∉ D := by
-        intro h2D
-        have hne : cubicVarV m i j 2 ≠ cubicVarV m i (if j + 1 < m then j + 1 else 0) 0 := by
-          intro h; have := (cubicVarV_injective hj (by split_ifs <;> omega)
-            (by omega) (by omega) h).2.2; omega
-        have hsub : ({cubicVarV m i j 2,
-            cubicVarV m i (if j + 1 < m then j + 1 else 0) 0} : Finset ℕ) ⊆ D ∩ bSet i j := by
-          intro z hz; simp only [Finset.mem_insert, Finset.mem_singleton] at hz
-          rcases hz with rfl | rfl
-          · exact Finset.mem_inter.mpr ⟨h2D, by simp [bSet]⟩
-          · exact Finset.mem_inter.mpr ⟨hnextD, by simp [bSet]⟩
-        have := Finset.card_le_card hsub; rw [Finset.card_pair hne] at this; dsimp only at h1; omega
-      have h1V : cubicVarV m i j 1 ∈ B.vertices :=
-        mem_baseGraphOf_vertices.mpr (Or.inl ⟨i, hi, j, hj, 1, by omega, rfl⟩)
-      rcases hDdom _ h1V with hmem | ⟨w, hwD, hadj⟩
-      · exact (hnot1 hmem).elim
-      · rw [baseGraphOf_adj_iff hm] at hadj
-        rcases hadj with ⟨i', hi', j', hj', h | h | h | h | h | h⟩ |
-            ⟨i', _, j', hj', ⟨_, h | h⟩ | ⟨_, h | h⟩⟩
-        all_goals
-          try (have h1 := cubicVarV_injective hj hj' (by omega) (by omega) h.1; omega)
-          try (have h1 :=
-            cubicVarV_injective hj (by split_ifs <;> omega) (by omega) (by omega) h.1; omega)
-          try (dsimp only [cubicVarV, cubicClauseV] at h; omega)
-        · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-          exact h.2 ▸ hwD
-        · rcases cubicVarV_injective hj hj' (by omega) (by omega) h.1 with ⟨rfl, rfl, _⟩
-          exact (hnot2 (h.2 ▸ hwD)).elim
-        · exact (hno_clause j' hj' (h.2 ▸ hwD)).elim
-    have hall_zero : ∀ i < n, ∀ j < m, cubicVarV m i j 0 ∈ D →
-        ∀ k < m, cubicVarV m i k 0 ∈ D := by
-      intro i hi j hj hjD
-      have hstep : ∀ d a, a < m → cubicVarV m i a 0 ∈ D →
-          cubicVarV m i ((a + m - d % m) % m) 0 ∈ D := by
-        intro d; induction d with
-        | zero =>
-          intro a ha haD
-          have : (a + m - 0 % m) % m = a := by
-            simp only [Nat.zero_mod, Nat.sub_zero, Nat.add_mod_right]; exact Nat.mod_eq_of_lt ha
-          rwa [this]
-        | succ d' ih =>
-          intro a ha haD
-          have hcur := ih a ha haD
-          set cur := (a + m - d' % m) % m
-          have hcur_lt : cur < m := Nat.mod_lt _ (by omega)
-          let prev := if cur = 0 then m - 1 else cur - 1
-          have hprev_lt : prev < m := by dsimp only [prev]; split_ifs <;> omega
-          have hprev_next : (if prev + 1 < m then prev + 1 else 0) = cur := by
-            dsimp only [prev]; split_ifs <;> omega
-          have hprevD := hback_step i hi prev hprev_lt (hprev_next ▸ hcur)
-          have hprev_eq : (a + m - (d' + 1) % m) % m = prev := by
-            have hstep2 : ((a + m - (d' + 1) % m) % m + 1) % m = cur := by
-              rw [Nat.add_mod, Nat.mod_mod, ← Nat.add_mod]
-              by_cases hd : d' % m + 1 < m
-              · have h1 : (d' + 1) % m = d' % m + 1 := by
-                  rw [Nat.add_mod, Nat.mod_eq_of_lt (by omega : 1 < m), Nat.mod_eq_of_lt hd]
-                rw [h1, show a + m - (d' % m + 1) + 1 = a + m - d' % m by omega]
-              · have hlt2 : d' % m < m := Nat.mod_lt _ (by omega)
-                have h1 : (d' + 1) % m = 0 := by
-                  rw [Nat.add_mod, Nat.mod_eq_of_lt (by omega : 1 < m),
-                    show d' % m + 1 = m by omega, Nat.mod_self]
-                rw [h1, Nat.sub_zero, show a + m + 1 = a + 1 + m by omega, Nat.add_mod_right]
-                dsimp only [cur]; rw [show a + m - d' % m = a + 1 by omega]
-            have hx_lt : (a + m - (d' + 1) % m) % m < m := Nat.mod_lt _ (by omega)
-            dsimp only [prev]
-            split_ifs with hc0
-            · by_contra hne
-              have hlt' : (a + m - (d' + 1) % m) % m + 1 < m := by omega
-              rw [Nat.mod_eq_of_lt hlt'] at hstep2; omega
-            · by_cases hx : (a + m - (d' + 1) % m) % m + 1 < m
-              · rw [Nat.mod_eq_of_lt hx] at hstep2; omega
-              · have hx1 : (a + m - (d' + 1) % m) % m + 1 = m := by omega
-                rw [hx1, Nat.mod_self] at hstep2; exact (hc0 hstep2.symm).elim
-          rwa [hprev_eq]
-      intro k hk
-      have hd := hstep ((j + m - k) % m) j hj hjD
-      have hcalc : (j + m - (j + m - k) % m % m) % m = k := by
-        rw [Nat.mod_mod]
-        by_cases hjk : k ≤ j
-        · have : (j + m - k) % m = j - k := by
-            rw [show j + m - k = (j - k) + m by omega, Nat.add_mod_right,
-              Nat.mod_eq_of_lt (by omega)]
-          rw [this, show j + m - (j - k) = k + m by omega, Nat.add_mod_right, Nat.mod_eq_of_lt hk]
-        · have : (j + m - k) % m = j + m - k := Nat.mod_eq_of_lt (by omega)
-          rw [this, show j + m - (j + m - k) = k by omega, Nat.mod_eq_of_lt hk]
-      rwa [hcalc] at hd
-    have hnot_both : ∀ i < n, ∀ j₁ < m, ∀ j₂ < m,
-        cubicVarV m i j₁ 0 ∈ D → cubicVarV m i j₂ 1 ∉ D := by
-      intro i hi j₁ hj₁ j₂ hj₂ ht hf
-      have hnextD := hall_zero i hi j₁ hj₁ ht (if j₂ + 1 < m then j₂ + 1 else 0)
-        (by split_ifs <;> omega)
-      have h1 := hcard_each (i, j₂) (by simp [idxSet, hi, hj₂])
-      have hne : cubicVarV m i j₂ 1 ≠ cubicVarV m i (if j₂ + 1 < m then j₂ + 1 else 0) 0 := by
-        intro h; have := (cubicVarV_injective hj₂ (by split_ifs <;> omega)
-          (by omega) (by omega) h).2.2; omega
-      have hsub : ({cubicVarV m i j₂ 1,
-          cubicVarV m i (if j₂ + 1 < m then j₂ + 1 else 0) 0} : Finset ℕ) ⊆ D ∩ bSet i j₂ := by
-        intro z hz; simp only [Finset.mem_insert, Finset.mem_singleton] at hz
-        rcases hz with rfl | rfl
-        · exact Finset.mem_inter.mpr ⟨hf, by simp [bSet]⟩
-        · exact Finset.mem_inter.mpr ⟨hnextD, by simp [bSet]⟩
-      have := Finset.card_le_card hsub; rw [Finset.card_pair hne] at this; dsimp only at h1; omega
-    let σ : ℕ → Bool := fun v ↦ decide (cubicVarV m (vars.idxOf v) 0 0 ∈ D)
-    refine ⟨σ, (CNF.eval_eq_true_iff σ φ).mpr fun c hc ↦ ?_⟩
-    obtain ⟨j, hj_φ, hc_eq⟩ := List.mem_iff_getElem.mp hc
-    have hj_m : j < m := by
-      have : clauses.length = φ.length + n := by
-        simp [clauses, normClauses, polyRange_eq_range, n, vars]
-      omega
-    have hcl_j : clauses.getD j [] = dedupList c := by
-      rw [list_getD_eq _ _ hj_m]
-      simp only [clauses, normClauses]
-      rw [List.getElem_append_left (by simp [hj_φ]), List.getElem_map, hc_eq]
-    have hcV : cubicClauseV j ∈ B.vertices := mem_baseGraphOf_vertices.mpr (Or.inr ⟨j, hj_m, rfl⟩)
-    rcases hDdom _ hcV with hmem | ⟨w, hwD, hadj⟩
-    · exact (hno_clause j hj_m hmem).elim
-    · rw [baseGraphOf_adj_iff hm] at hadj
-      rcases hadj with ⟨i, _, j', _, h | h | h | h | h | h⟩ |
-          ⟨i, hi, j', hj', ⟨hl, h | h⟩ | ⟨hl, h | h⟩⟩
-      all_goals try (unfold cubicVarV cubicClauseV at h; omega)
-      · have hj_eq : j' = j := by unfold cubicClauseV at h; omega
-        rw [hj_eq] at hl h
-        have hlit : (vars.getD i 0, true) ∈ c := mem_dedupList.mp (hcl_j ▸ hl)
-        have hidx : vars.idxOf (vars.getD i 0) = i := by
-          rw [list_getD_eq _ _ hi]; exact List.Nodup.idxOf_getElem hnd i hi
-        have h0D := hall_zero i hi j hj_m (h.2 ▸ hwD) 0 (by omega)
-        exact (Clause.eval_eq_true_iff σ c).mpr ⟨(vars.getD i 0, true), hlit, by
-          dsimp only [σ]; rw [hidx]; exact decide_eq_true h0D⟩
-      · have hj_eq : j' = j := by unfold cubicClauseV at h; omega
-        rw [hj_eq] at hl h
-        have hlit : (vars.getD i 0, false) ∈ c := mem_dedupList.mp (hcl_j ▸ hl)
-        have hidx : vars.idxOf (vars.getD i 0) = i := by
-          rw [list_getD_eq _ _ hi]; exact List.Nodup.idxOf_getElem hnd i hi
-        have h0not : cubicVarV m i 0 0 ∉ D := fun h0D ↦
-          hnot_both i hi 0 (by omega) j hj_m h0D (h.2 ▸ hwD)
-        exact (Clause.eval_eq_true_iff σ c).mpr ⟨(vars.getD i 0, false), hlit, by
-          dsimp only [σ]; rw [hidx]; exact decide_eq_false h0not⟩
-  · rintro ⟨σ, hσ⟩
-    let D : Finset ℕ :=
-      ((List.range n).toFinset ×ˢ (List.range m).toFinset).image fun p ↦
-        cubicVarV m p.1 p.2 (if σ (vars.getD p.1 0) then 0 else 1)
-    have hD_sub : ∀ v ∈ D, v ∈ B.vertices := fun v hv ↦ by
-      obtain ⟨⟨i, j⟩, hp, rfl⟩ := Finset.mem_image.mp hv
-      simp only [Finset.mem_product, List.mem_toFinset, List.mem_range] at hp
-      exact mem_baseGraphOf_vertices.mpr
-        (Or.inl ⟨i, hp.1, j, hp.2, if σ (vars.getD i 0) then 0 else 1, by split_ifs <;> omega, rfl⟩)
-    have hD_card : D.card ≤ n * m :=
-      Finset.card_image_le.trans (by
-        simp [Finset.card_product, List.toFinset_card_of_nodup List.nodup_range])
-    have hD_dom : ∀ v ∈ B.vertices, v ∈ D ∨ ∃ w ∈ D, B.toSimpleGraph.Adj v w := by
-      intro v hv
-      rcases mem_baseGraphOf_vertices.mp hv with ⟨i, hi, j, hj, r, hr, rfl⟩ | ⟨j, hj, rfl⟩
-      · have hpick : cubicVarV m i j (if σ (vars.getD i 0) then 0 else 1) ∈ D :=
-          Finset.mem_image.mpr ⟨(i, j), by simp [hi, hj, n, m], rfl⟩
-        interval_cases r
-        · cases hσi : σ (vars.getD i 0)
-          · exact Or.inr ⟨_, by rw [hσi] at hpick; exact hpick, (baseGraphOf_adj_iff hm).mpr
-              (Or.inl ⟨i, hi, j, hj, Or.inl ⟨rfl, rfl⟩⟩)⟩
-          · exact Or.inl (by rw [hσi] at hpick; exact hpick)
-        · cases hσi : σ (vars.getD i 0)
-          · exact Or.inl (by rw [hσi] at hpick; exact hpick)
-          · exact Or.inr ⟨_, by rw [hσi] at hpick; exact hpick, (baseGraphOf_adj_iff hm).mpr
-              (Or.inl ⟨i, hi, j, hj, Or.inr (Or.inl ⟨rfl, rfl⟩)⟩)⟩
-        · cases hσi : σ (vars.getD i 0)
-          · exact Or.inr ⟨_, by rw [hσi] at hpick; exact hpick, (baseGraphOf_adj_iff hm).mpr
-              (Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, rfl⟩)))⟩)⟩
-          · let jnext := if j + 1 < m then j + 1 else 0
-            have hjnext : jnext < m := by dsimp only [jnext]; split_ifs <;> omega
-            have hpick' : cubicVarV m i jnext 0 ∈ D :=
-              Finset.mem_image.mpr ⟨(i, jnext),
-                Finset.mem_product.mpr ⟨List.mem_toFinset.mpr (List.mem_range.mpr hi),
-                  List.mem_toFinset.mpr (List.mem_range.mpr hjnext)⟩, by dsimp only; rw [hσi]; rfl⟩
-            exact Or.inr ⟨_, hpick', (baseGraphOf_adj_iff hm).mpr
-              (Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, rfl⟩))))⟩)⟩
-      · have hsat_j : (clauses.getD j []).eval σ = true := by
-          rw [list_getD_eq _ _ hj]
-          simp only [clauses, normClauses]
-          by_cases hjφ : j < φ.length
-          · rw [List.getElem_append_left (by simp [hjφ]), List.getElem_map]
-            have hcj := (CNF.eval_eq_true_iff σ φ).mp hσ _ (List.getElem_mem hjφ)
-            obtain ⟨l, hl, hlv⟩ := (Clause.eval_eq_true_iff σ _).mp hcj
-            exact (Clause.eval_eq_true_iff σ _).mpr ⟨l, mem_dedupList.mpr hl, hlv⟩
-          · rw [List.getElem_append_right (by simp; omega), List.getElem_map]
-            simp only [polyRange_eq_range, List.getElem_range]
-            refine (Clause.eval_eq_true_iff σ _).mpr ?_
-            cases hσi : σ (vars.getD (j - φ.length) 0)
-            · exact ⟨(vars.getD (j - φ.length) 0, false),
-                mem_dedupList.mpr (by change _ ∈ [_, _, _]; simp [vars]), hσi⟩
-            · exact ⟨(vars.getD (j - φ.length) 0, true),
-                mem_dedupList.mpr (by change _ ∈ [_, _, _]; simp [vars]), hσi⟩
-        obtain ⟨⟨v, b⟩, hl, hvb⟩ := (Clause.eval_eq_true_iff σ _).mp hsat_j
-        have hv_mem : v ∈ vars := normClauses_mem_vars hj hl
-        have hi : vars.idxOf v < n := List.idxOf_lt_length_iff.mpr hv_mem
-        have hget : vars.getD (vars.idxOf v) 0 = v := by
-          rw [list_getD_eq _ _ hi, List.getElem_idxOf]
-        have hpick : cubicVarV m (vars.idxOf v) j (if b then 0 else 1) ∈ D :=
-          Finset.mem_image.mpr ⟨(vars.idxOf v, j),
-            Finset.mem_product.mpr ⟨List.mem_toFinset.mpr (List.mem_range.mpr hi),
-              List.mem_toFinset.mpr (List.mem_range.mpr hj)⟩,
-            by dsimp only; rw [hget, hvb]⟩
-        right
-        refine ⟨_, hpick, (baseGraphOf_adj_iff hm).mpr (Or.inr ⟨vars.idxOf v, hi, j, hj, ?_⟩)⟩
-        cases b
-        · exact Or.inr ⟨by rw [hget]; exact hl, Or.inl ⟨rfl, rfl⟩⟩
-        · exact Or.inl ⟨by rw [hget]; exact hl, Or.inl ⟨rfl, rfl⟩⟩
-    exact ⟨D, hD_sub, hD_dom, hD_card⟩
+@[local fun_prop]
+private theorem computableInPolyTime_ternVert_unary :
+    ComputableInPolyTime ternVert encUnary encNat := by
+  unfold ternVert
+  exact unary_to_binary.comp (by fun_prop)
 
-private lemma baseGraphOf_connected {φ : CNF ℕ} (hvalid : isNontrivialThreeCNF φ = true) :
-    (baseGraphOf (dedupList φ.vars) (normClauses φ)).induced.Connected := by
-  let vars := dedupList φ.vars
-  let clauses := normClauses φ
-  let B := baseGraphOf vars clauses
-  obtain ⟨hvars_pos, hm⟩ := nontrivial_vars_clauses hvalid
-  simp only [isNontrivialThreeCNF, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true] at hvalid
-  obtain ⟨_, hφ_cl⟩ := hvalid
-  set n := vars.length; set m := clauses.length
-  let mkV (i j r : ℕ) (hi : i < n) (hj : j < m) (hr : r < 3) : {w // w ∈ B.vertices} :=
-    ⟨cubicVarV m i j r, mem_baseGraphOf_vertices.mpr (Or.inl ⟨i, hi, j, hj, r, hr, rfl⟩)⟩
-  let mkC (j : ℕ) (hj : j < m) : {w // w ∈ B.vertices} :=
-    ⟨cubicClauseV j, mem_baseGraphOf_vertices.mpr (Or.inr ⟨j, hj, rfl⟩)⟩
-  refine B.induced.connected_iff_exists_forall_reachable.mpr ⟨mkV 0 0 0 hvars_pos (by omega)
-      (by omega), fun u ↦ ?_⟩
-  have hring_reach : ∀ i (hi : i < n) j (hj : j < m) r (hr : r < 3),
-      B.induced.Reachable (mkV i 0 0 hi (by omega) (by omega)) (mkV i j r hi hj hr) := by
-    intro i hi j
-    have hstep0 : ∀ j (hj : j < m),
-        B.induced.Reachable (mkV i 0 0 hi (by omega) (by omega)) (mkV i j 0 hi hj (by omega)) := by
-      intro j; induction j with
-      | zero => intro _; exact .refl _
-      | succ j' ih =>
-        intro hj'
-        have hj0 : j' < m := by omega
-        have ha01 : B.induced.Adj (mkV i j' 0 hi hj0 (by omega)) (mkV i j' 1 hi hj0 (by omega)) :=
-          (baseGraphOf_adj_iff hm).mpr (Or.inl ⟨i, hi, j', hj0, Or.inl ⟨rfl, rfl⟩⟩)
-        have ha12 : B.induced.Adj (mkV i j' 1 hi hj0 (by omega)) (mkV i j' 2 hi hj0 (by omega)) :=
-          (baseGraphOf_adj_iff hm).mpr (Or.inl ⟨i, hi, j', hj0, Or.inr (Or.inr (Or.inl ⟨rfl,
-            rfl⟩))⟩)
-        have ha20 : B.induced.Adj (mkV i j' 2 hi hj0 (by omega))
-            (mkV i (j' + 1) 0 hi hj' (by omega)) := by
-          have hj'm : j' + 1 < clauses.length := hj'
-          exact (baseGraphOf_adj_iff hm).mpr (Or.inl ⟨i, hi, j', hj0,
-            Or.inr (Or.inr (Or.inr (Or.inr (Or.inl ⟨rfl, by
-              change cubicVarV m i (j' + 1) 0 =
-                cubicVarV m i (if j' + 1 < clauses.length then j' + 1 else 0) 0
-              simp only [hj'm, ↓reduceIte]⟩))))⟩)
-        exact ((ih hj0).trans ha01.reachable).trans (ha12.reachable.trans ha20.reachable)
-    intro hj r hr
-    interval_cases r
-    · exact hstep0 j hj
-    · exact (hstep0 j hj).trans (_root_.SimpleGraph.Adj.reachable
-        ((baseGraphOf_adj_iff hm).mpr (Or.inl ⟨i, hi, j, hj, Or.inl ⟨rfl, rfl⟩⟩)))
-    · have ha01 : B.induced.Adj (mkV i j 0 hi hj (by omega)) (mkV i j 1 hi hj (by omega)) :=
-        (baseGraphOf_adj_iff hm).mpr (Or.inl ⟨i, hi, j, hj, Or.inl ⟨rfl, rfl⟩⟩)
-      have ha12 : B.induced.Adj (mkV i j 1 hi hj (by omega)) (mkV i j 2 hi hj (by omega)) :=
-        (baseGraphOf_adj_iff hm).mpr (Or.inl ⟨i, hi, j, hj, Or.inr (Or.inr (Or.inl ⟨rfl, rfl⟩))⟩)
-      exact ((hstep0 j hj).trans ha01.reachable).trans ha12.reachable
-  have hvar_reach : ∀ i (hi : i < n),
-      B.induced.Reachable (mkV 0 0 0 hvars_pos (by omega) (by omega))
-        (mkV i 0 0 hi (by omega) (by omega)) := by
-    intro i; induction i with
-    | zero => intro _; exact .refl _
-    | succ i' ih =>
-      intro hi'
-      have hi0 : i' < n := by omega
-      let j := φ.length + i'
-      have hj : j < m := by
-        have : clauses.length = φ.length + n := by
-          simp [clauses, normClauses, polyRange_eq_range, n, vars]
-        omega
-      have hcl_j : (vars.getD i' 0, true) ∈ clauses.getD j [] ∧
-          (vars.getD (i' + 1) 0, true) ∈ clauses.getD j [] := by
-        rw [list_getD_eq _ _ hj]; simp only [clauses, normClauses]
-        rw [List.getElem_append_right (by simp; omega), List.getElem_map]
-        simp only [List.length_map, polyRange_eq_range, List.getElem_range, j,
-          Nat.add_sub_cancel_left]
-        have hi : i' + 1 < (dedupList φ.vars).length := hi'
-        exact ⟨mem_dedupList.mpr (by simp [vars]), mem_dedupList.mpr (by simp [vars, hi])⟩
-      have ha1 : B.induced.Adj (mkV i' j 0 hi0 hj (by omega)) (mkC j hj) :=
-        (baseGraphOf_adj_iff hm).mpr (Or.inr ⟨i', hi0, j, hj, Or.inl ⟨hcl_j.1, Or.inr ⟨rfl, rfl⟩⟩⟩)
-      have ha2 : B.induced.Adj (mkC j hj) (mkV (i' + 1) j 0 hi' hj (by omega)) :=
-        (baseGraphOf_adj_iff hm).mpr (Or.inr ⟨i' +
-          1, hi', j, hj, Or.inl ⟨hcl_j.2, Or.inl ⟨rfl, rfl⟩⟩⟩)
-      exact (((ih hi0).trans (hring_reach i' hi0 j hj 0 (by omega))).trans
-        (ha1.reachable.trans ha2.reachable)).trans
-        (hring_reach (i' + 1) hi' j hj 0 (by omega)).symm
-  rcases mem_baseGraphOf_vertices.mp u.2 with ⟨i, hi, j, hj, r, hr, hu⟩ | ⟨j, hj, hu⟩
-  · rw [show u = mkV i j r hi hj hr from Subtype.ext hu]
-    exact (hvar_reach i hi).trans (hring_reach i hi j hj r hr)
-  · rw [show u = mkC j hj from Subtype.ext hu]
-    have hcj_pos : 0 < (clauses.getD j []).length := by
-      rw [list_getD_eq _ _ hj]
-      simp only [clauses, normClauses]
-      by_cases hjφ : j < φ.length
-      · rw [List.getElem_append_left (by simp [hjφ]), List.getElem_map]
-        obtain ⟨l, hl⟩ := List.exists_mem_of_ne_nil φ[j]
-          (List.ne_nil_of_length_pos (hφ_cl _ (List.getElem_mem hjφ)).1)
-        exact List.length_pos_of_mem (mem_dedupList.mpr hl)
-      · rw [List.getElem_append_right (by simp; omega), List.getElem_map]
-        simp only [List.length_map, polyRange_eq_range, List.getElem_range]
-        exact List.length_pos_of_mem (a := ((dedupList φ.vars).getD (j - φ.length) 0, true))
-          (mem_dedupList.mpr (by simp))
-    obtain ⟨⟨v, b⟩, hl⟩ := List.exists_mem_of_ne_nil _ (List.ne_nil_of_length_pos hcj_pos)
-    have hv_mem : v ∈ vars := normClauses_mem_vars hj hl
-    have hi : vars.idxOf v < n := List.idxOf_lt_length_iff.mpr hv_mem
-    have hget : vars.getD (vars.idxOf v) 0 = v := by
-      rw [list_getD_eq _ _ hi, List.getElem_idxOf]
-    have hadj : B.induced.Adj
-        ⟨cubicVarV m (vars.idxOf v) j (if b then 0 else 1),
-          mem_baseGraphOf_vertices.mpr (Or.inl ⟨vars.idxOf v, hi, j, hj, if b then 0 else 1,
-            by split_ifs <;> omega, rfl⟩)⟩
-        ⟨cubicClauseV j, mem_baseGraphOf_vertices.mpr (Or.inr ⟨j, hj, rfl⟩)⟩ := by
-      rw [Graph.induced_adj, baseGraphOf_adj_iff hm]
-      cases b
-      · exact Or.inr ⟨vars.idxOf v, hi, j, hj,
-          Or.inr ⟨by rw [hget]; exact hl, Or.inr ⟨rfl, rfl⟩⟩⟩
-      · exact Or.inr ⟨vars.idxOf v, hi, j, hj,
-          Or.inl ⟨by rw [hget]; exact hl, Or.inr ⟨rfl, rfl⟩⟩⟩
-    exact ((hvar_reach (vars.idxOf v) hi).trans
-      (hring_reach (vars.idxOf v) hi j hj _ (by split_ifs <;> omega))).trans hadj.reachable
+@[local fun_prop]
+private theorem computableInPolyTime_binVert_unary :
+    ComputableInPolyTime binVert encUnary encNat := by
+  unfold binVert
+  exact unary_to_binary.comp (by fun_prop)
 
-/-! ### 4. Reduction Correctness and Polynomial-Time Computability -/
+attribute [local irreducible] occSlots nextSlot negPort posBinPort gadVert ternVert binVert
 
-/-- **Reduction correctness**: `toCubicDominatingSet φ ∈ CubicDominatingSet ↔ φ ∈ ThreeSAT`. -/
-theorem toCubicDominatingSet_mem_iff (φ : CNF ℕ) :
-    toCubicDominatingSet φ ∈ CubicDominatingSet ↔ φ ∈ ThreeSAT := by
-  unfold toCubicDominatingSet
-  by_cases hemp : φ.isEmpty = true
-  · have hnil : φ = [] := List.isEmpty_iff.mp hemp
-    subst hnil
-    simp only [hemp, ↓reduceIte]
-    exact ⟨fun _ ↦ ⟨fun _ h ↦ by simp at h, ⟨fun _ ↦ false, by simp⟩⟩, fun _ ↦ k4Graph_mem_one⟩
-  · simp only [hemp]
-    by_cases hvalid : isNontrivialThreeCNF φ = true
-    · simp only [hvalid, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
-      have hvalid' := hvalid
-      simp only [isNontrivialThreeCNF, Bool.and_eq_true, decide_eq_true_eq,
-        List.all_eq_true] at hvalid'
-      let vars := dedupList φ.vars
-      let clauses := normClauses φ
-      let B := baseGraphOf vars clauses
-      let T := (B.vertices.map fun u ↦ 3 - cubicGraphDegBool B u).sum
-      have hndB : B.vertices.Nodup := baseGraphOf_vertices_nodup vars clauses
-      have hmodB : ∀ u ∈ B.vertices, u % 4 ≠ 3 := fun u hu ↦ by
-        rcases mem_baseGraphOf_vertices.mp hu with ⟨_, _, _, _, _, _, rfl⟩ | ⟨_, _, rfl⟩ <;>
-          dsimp only [cubicVarV, cubicClauseV] <;> omega
-      obtain ⟨hvars_pos, hm⟩ := nontrivial_vars_clauses hvalid
-      have hEB : ∀ e ∈ B.edges, e.1 ∈ B.vertices ∧ e.2 ∈ B.vertices := by
-        intro ⟨a, b⟩ hab
-        unfold B baseGraphOf at hab
-        simp only [polyRange_eq_range, List.mem_append, List.mem_flatMap, List.mem_range,
-          List.mem_cons, List.not_mem_nil, or_false, Prod.mk.injEq] at hab
-        have hV := @mem_baseGraphOf_vertices vars clauses
-        rcases hab with ⟨i, hi, j, hj, ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩⟩ | ⟨i, hi, j, hj, h⟩
-        · exact ⟨hV.mpr (.inl ⟨i, hi, j, hj, 0, by omega, rfl⟩),
-            hV.mpr (.inl ⟨i, hi, j, hj, 1, by omega, rfl⟩)⟩
-        · exact ⟨hV.mpr (.inl ⟨i, hi, j, hj, 1, by omega, rfl⟩),
-            hV.mpr (.inl ⟨i, hi, j, hj, 2, by omega, rfl⟩)⟩
-        · exact ⟨hV.mpr (.inl ⟨i, hi, j, hj, 2, by omega, rfl⟩),
-            hV.mpr (.inl ⟨i, hi, _, by split_ifs <;> omega, 0, by omega, rfl⟩)⟩
-        · rcases h with h1 | h2
-          · split_ifs at h1 <;> simp only [List.mem_singleton, Prod.mk.injEq,
-              List.not_mem_nil] at h1
-            rcases h1 with ⟨rfl, rfl⟩
-            exact ⟨hV.mpr (.inr ⟨j, hj, rfl⟩), hV.mpr (.inl ⟨i, hi, j, hj, 0, by omega, rfl⟩)⟩
-          · split_ifs at h2 <;> simp only [List.mem_singleton, Prod.mk.injEq,
-              List.not_mem_nil] at h2
-            rcases h2 with ⟨rfl, rfl⟩
-            exact ⟨hV.mpr (.inr ⟨j, hj, rfl⟩), hV.mpr (.inl ⟨i, hi, j, hj, 1, by omega, rfl⟩)⟩
-      have hdegB : ∀ u ∈ B.vertices, 1 ≤ cubicGraphDegBool B u ∧ cubicGraphDegBool B u ≤ 3 := by
-        intro u hu
-        refine baseGraphOf_degree_bounds (nodup_dedupList φ.vars) hm ?_ ?_ ?_ ?_ hu
-        · intro c hc
-          simp only [normClauses, List.mem_append, List.mem_map, polyRange_eq_range,
-            List.mem_range] at hc
-          rcases hc with ⟨d, hd, rfl⟩ | ⟨i, _, rfl⟩
-          · obtain ⟨l, hl⟩ := List.exists_mem_of_ne_nil d
-              (List.ne_nil_of_length_pos (hvalid'.2 d hd).1)
-            exact List.length_pos_of_mem (mem_dedupList.mpr hl)
-          · exact List.length_pos_of_mem (a := (vars.getD i 0, true))
-              (mem_dedupList.mpr (by dsimp only [vars]; simp))
-        · intro c hc
-          simp only [normClauses, List.mem_append, List.mem_map, polyRange_eq_range,
-            List.mem_range] at hc
-          rcases hc with ⟨d, hd, rfl⟩ | ⟨i, _, rfl⟩
-          · exact (length_dedupList_le d).trans (hvalid'.2 d hd).2
-          · exact (length_dedupList_le _).trans (by simp)
-        · intro c hc
-          simp only [normClauses, List.mem_append, List.mem_map] at hc
-          rcases hc with ⟨d, _, rfl⟩ | ⟨_, _, rfl⟩ <;> exact nodup_dedupList _
-        · intro c hc l hl
-          simp only [normClauses, List.mem_append, List.mem_map, polyRange_eq_range,
-            List.mem_range] at hc
-          rcases hc with ⟨d, hd, rfl⟩ | ⟨i, hi, rfl⟩
-          · exact mem_dedupList.mpr (CNF.mem_vars.mpr ⟨d, hd, l.2, mem_dedupList.mp hl⟩)
-          · have hl' := mem_dedupList.mp hl
-            have hi2 : (if i + 1 < vars.length then i + 1 else 0) < vars.length := by
-              split_ifs <;> omega
-            simp only [List.mem_cons, List.not_mem_nil, or_false] at hl'
-            rcases hl' with rfl | rfl | rfl
-            · rw [list_getD_eq _ _ hi]; exact List.getElem_mem hi
-            · rw [list_getD_eq _ _ hi]; exact List.getElem_mem hi
-            · rw [list_getD_eq _ _ hi2]; exact List.getElem_mem hi2
-      have hconnG : (cappedGraphOf B).induced.Connected :=
-        cappedGraphOf_connected hmodB (baseGraphOf_connected hvalid)
-      have hcubG : ∀ v : {w // w ∈ (cappedGraphOf B).vertices},
-          (cappedGraphOf B).induced.degree v = 3 :=
-        cappedGraphOf_cubic hndB hmodB hEB hdegB
-      have hbound_le : vars.length * clauses.length + 2 * T ≤
-          (cappedGraphOf B).vertices.toFinset.card := by
-        rw [List.toFinset_card_of_nodup (cappedGraphOf_vertices_nodup hndB hmodB),
-          cappedGraphOf_vertices_length]
-        have hBlen : vars.length * clauses.length ≤ B.vertices.length := by
-          unfold B baseGraphOf
-          simp only [polyRange_eq_range, List.length_append, List.length_flatMap]
-          have h3 : ∀ k : ℕ, ((List.range k).map fun _ ↦ 3).sum = 3 * k := fun k ↦ by
-            induction k with
-            | zero => simp
-            | succ k ih => rw [List.range_succ, List.map_append, List.sum_append, ih]; simp; ring
-          have h1 : ∀ n : ℕ, ((List.range n).map fun _ ↦
-              ((List.range clauses.length).map fun _ ↦ 3).sum).sum = n * (3 * clauses.length) := by
-            intro n; induction n with
-            | zero => simp
-            | succ n ih =>
-              rw [List.range_succ, List.map_append, List.sum_append, ih, h3]; simp; ring
-          have hvar : ((List.range vars.length).map fun i ↦
-              ((List.range clauses.length).map fun j ↦
-                [cubicVarV clauses.length i j 0, cubicVarV clauses.length i j 1,
-                  cubicVarV clauses.length i j 2].length).sum).sum =
-              vars.length * (3 * clauses.length) := by
-            simpa using h1 vars.length
-          rw [hvar]
-          have : vars.length * (3 * clauses.length) = 3 * (vars.length * clauses.length) := by ring
-          omega
-        change vars.length * clauses.length + 2 * T ≤ B.vertices.length + 7 * T
-        omega
-      rw [mem_CubicDominatingSet_iff, mem_DominatingSet_iff_exists_card_le]
-      constructor
-      · rintro ⟨_, _, _, hdom⟩
-        exact ⟨fun c hc ↦ (hvalid'.2 c hc).2,
-          (baseGraphOf_dom_iff hvalid).mp ((cappedGraphOf_dom_iff hndB hmodB hEB _).mp hdom)⟩
-      · rintro ⟨_, hsat⟩
-        refine ⟨hconnG, hcubG, hbound_le,
-          (cappedGraphOf_dom_iff hndB hmodB hEB _).mpr ((baseGraphOf_dom_iff hvalid).mpr hsat)⟩
-    · simp only [hvalid, Bool.not_false]
-      refine ⟨fun h ↦ (k4Graph_not_mem_zero h).elim, fun h ↦ ?_⟩
-      exfalso; apply hvalid
-      simp only [isNontrivialThreeCNF, Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
-      refine ⟨List.length_pos_of_ne_nil (List.isEmpty_eq_false_iff.mp (by simpa using hemp)),
-        fun c hc ↦ ⟨?_, h.1 c hc⟩⟩
-      rcases h.2 with ⟨σ, hσ⟩
-      obtain ⟨l, hl, _⟩ := (Clause.eval_eq_true_iff σ c).mp ((CNF.eval_eq_true_iff σ φ).mp hσ c hc)
-      exact List.length_pos_of_mem hl
+private def cubicSATEBin (φ : CNF ℕ) : List (ℕ × ℕ) :=
+  let ψ := φ ++ φ
+  let L := ψ.flatten
+  (List.range (3 * ψ.length)).flatMap fun s ↦
+    [(binVert s, gadVert s (negPort L s)),
+     (binVert s, gadVert (nextSlot L s) (posBinPort L (nextSlot L s)))]
 
-private lemma computableInPolyTime_cubicVarV :
-    ComputableInPolyTime (fun q : ((ℕ × ℕ) × ℕ) × ℕ ↦ cubicVarV q.1.1.1 q.1.1.2 q.1.2 q.2)
-      (encPair (encPair (encPair encUnary encUnary) encUnary) encUnary) encNat :=
-  ComputableInPolyTime.unary_to_binary.comp (ComputableInPolyTime.unary_mul'
-    (ComputableInPolyTime.const 4) (ComputableInPolyTime.unary_add'
-      (ComputableInPolyTime.unary_mul' (ComputableInPolyTime.const 3)
-        (ComputableInPolyTime.unary_add'
-          (ComputableInPolyTime.unary_mul' (by fun_prop) (by fun_prop)) (by fun_prop)))
-      (by fun_prop)))
+private theorem computableInPolyTime_cubicSATEBin :
+    ComputableInPolyTime cubicSATEBin encCNF (encList (encPair encNat encNat)) := by
+  unfold cubicSATEBin
+  set E := encPair encCNF encUnary
+  set P := encPair encNat encNat
+  have hψ : ComputableInPolyTime (fun φ : CNF ℕ ↦ φ ++ φ) encCNF encCNF :=
+    listAppend' id' id'
+  have hM : ComputableInPolyTime (fun φ : CNF ℕ ↦ (φ ++ φ).length) encCNF encUnary :=
+    (length_list (encList encLit)).comp hψ
+  have h3mul : ComputableInPolyTime (fun n : ℕ ↦ 3 * n) encUnary encUnary := by fun_prop
+  have h3M : ComputableInPolyTime (fun φ : CNF ℕ ↦ 3 * (φ ++ φ).length) encCNF encUnary :=
+    h3mul.comp hM
+  have hL : ComputableInPolyTime (fun φ : CNF ℕ ↦ (φ ++ φ).flatten) encCNF encLitList :=
+    (flatten encLit).comp hψ
+  have hLq : ComputableInPolyTime (fun q : CNF ℕ × ℕ ↦ (q.1 ++ q.1).flatten) E encLitList :=
+    hL.comp (fst encCNF encUnary)
+  have hsq : ComputableInPolyTime (fun q : CNF ℕ × ℕ ↦ q.2) E encUnary :=
+    snd encCNF encUnary
+  have hnxt : ComputableInPolyTime
+      (fun q : CNF ℕ × ℕ ↦ nextSlot (q.1 ++ q.1).flatten q.2) E encUnary :=
+    computableInPolyTime_nextSlot.comp (hLq.prod hsq)
+  have hneg : ComputableInPolyTime
+      (fun q : CNF ℕ × ℕ ↦ negPort (q.1 ++ q.1).flatten q.2) E encUnary :=
+    computableInPolyTime_negPort.comp (hLq.prod hsq)
+  have hpos : ComputableInPolyTime
+      (fun q : CNF ℕ × ℕ ↦ posBinPort (q.1 ++ q.1).flatten (nextSlot (q.1 ++ q.1).flatten q.2))
+      E encUnary :=
+    computableInPolyTime_posBinPort.comp (hLq.prod hnxt)
+  have hbin : ComputableInPolyTime (fun q : CNF ℕ × ℕ ↦ binVert q.2) E encNat :=
+    computableInPolyTime_binVert_unary.comp hsq
+  have hp1 : ComputableInPolyTime
+      (fun q : CNF ℕ × ℕ ↦ (binVert q.2, gadVert q.2 (negPort (q.1 ++ q.1).flatten q.2))) E P :=
+    hbin.prod (computableInPolyTime_gadVert_unary.comp (hsq.prod hneg))
+  have hp2 : ComputableInPolyTime
+      (fun q : CNF ℕ × ℕ ↦ (binVert q.2,
+        gadVert (nextSlot (q.1 ++ q.1).flatten q.2)
+          (posBinPort (q.1 ++ q.1).flatten (nextSlot (q.1 ++ q.1).flatten q.2)))) E P :=
+    hbin.prod (computableInPolyTime_gadVert_unary.comp (hnxt.prod hpos))
+  have hnil : ComputableInPolyTime (fun _ : CNF ℕ × ℕ ↦ ([] : List (ℕ × ℕ))) E (encList P) :=
+    const []
+  exact flatMapWithInput (range.comp h3M) (hp1.cons' (hp2.cons' hnil))
 
-private lemma cpt_congr {α β : Type} {encA : α ↪ List Bool} {encB : β ↪ List Bool}
-    {f g : α → β} (hf : ComputableInPolyTime f encA encB) (h : ∀ x, f x = g x) :
-    ComputableInPolyTime g encA encB := by
-  have heq : f = g := funext h
-  exact heq ▸ hf
+private theorem computableInPolyTime_cubicSATGraph :
+    ComputableInPolyTime cubicSATGraph encCNF encGraph := by
+  have hψ : ComputableInPolyTime (fun φ : CNF ℕ ↦ φ ++ φ) encCNF encCNF :=
+    listAppend' id' id'
+  have hM : ComputableInPolyTime (fun φ : CNF ℕ ↦ (φ ++ φ).length) encCNF encUnary :=
+    (length_list (encList encLit)).comp hψ
+  have h3mul : ComputableInPolyTime (fun n : ℕ ↦ 3 * n) encUnary encUnary := by fun_prop
+  have h3M : ComputableInPolyTime (fun φ : CNF ℕ ↦ 3 * (φ ++ φ).length) encCNF encUnary :=
+    h3mul.comp hM
+  have hvGad : ComputableInPolyTime
+      (fun φ : CNF ℕ ↦ (List.range (3 * (φ ++ φ).length)).flatMap fun s ↦
+        (List.range 13).map fun u ↦ gadVert s u)
+      encCNF (encList encNat) := by
+    refine flatMapWithInput (range.comp h3M) ?_
+    exact mapConst (List.range 13) fun u _ ↦
+      computableInPolyTime_gadVert_unary.comp ((snd encCNF encUnary).prod (const u))
+  have hvTern : ComputableInPolyTime
+      (fun φ : CNF ℕ ↦ (List.range (φ ++ φ).length).map ternVert)
+      encCNF (encList encNat) :=
+    mapWithInput (range.comp hM) (computableInPolyTime_ternVert_unary.comp (snd encCNF encUnary))
+  have hvBin : ComputableInPolyTime
+      (fun φ : CNF ℕ ↦ (List.range (3 * (φ ++ φ).length)).map binVert)
+      encCNF (encList encNat) :=
+    mapWithInput (range.comp h3M) (computableInPolyTime_binVert_unary.comp (snd encCNF encUnary))
+  have heGad : ComputableInPolyTime
+      (fun φ : CNF ℕ ↦ (List.range (3 * (φ ++ φ).length)).flatMap fun s ↦
+        h13Edges.map fun e ↦ (gadVert s e.1, gadVert s e.2))
+      encCNF (encList (encPair encNat encNat)) := by
+    refine flatMapWithInput (range.comp h3M) ?_
+    exact mapConst h13Edges fun e _ ↦
+      (computableInPolyTime_gadVert_unary.comp ((snd encCNF encUnary).prod (const e.1))).prod
+        (computableInPolyTime_gadVert_unary.comp ((snd encCNF encUnary).prod (const e.2)))
+  have heTern : ComputableInPolyTime
+      (fun φ : CNF ℕ ↦ (List.range (φ ++ φ).length).flatMap fun i ↦
+        [0, 1, 2].map fun p ↦ (ternVert i, gadVert (3 * i + p) 0))
+      encCNF (encList (encPair encNat encNat)) := by
+    refine flatMapWithInput (range.comp hM) ?_
+    refine mapConst [0, 1, 2] fun p _ ↦ ?_
+    have hp_step : ComputableInPolyTime (fun n : ℕ ↦ 3 * n + p) encUnary encUnary := by fun_prop
+    have hidx : ComputableInPolyTime (fun q : CNF ℕ × ℕ ↦ 3 * q.2 + p)
+        (encPair encCNF encUnary) encUnary := hp_step.comp (snd encCNF encUnary)
+    exact (computableInPolyTime_ternVert_unary.comp (snd encCNF encUnary)).prod
+      (computableInPolyTime_gadVert_unary.comp (hidx.prod (const 0)))
+  have hePair : ComputableInPolyTime
+      (fun φ : CNF ℕ ↦ (List.range (3 * φ.length)).map fun t ↦
+        (binVert (2 * t), binVert (2 * t + 1)))
+      encCNF (encList (encPair encNat encNat)) := by
+    have h3len : ComputableInPolyTime (fun φ : CNF ℕ ↦ 3 * φ.length) encCNF encUnary :=
+      h3mul.comp (length_list (encList encLit))
+    refine mapWithInput (range.comp h3len) ?_
+    have hm2 : ComputableInPolyTime (fun n : ℕ ↦ 2 * n) encUnary encUnary := by fun_prop
+    have hm21 : ComputableInPolyTime (fun n : ℕ ↦ 2 * n + 1) encUnary encUnary := by fun_prop
+    exact (computableInPolyTime_binVert_unary.comp (hm2.comp (snd encCNF encUnary))).prod
+      (computableInPolyTime_binVert_unary.comp (hm21.comp (snd encCNF encUnary)))
+  exact (encGraph_mk_polyTime
+    (listAppend' (listAppend' hvGad hvTern) hvBin)
+    (listAppend' (listAppend' (listAppend' heGad heTern) computableInPolyTime_cubicSATEBin)
+      hePair)).of_enc_eq fun _ ↦ rfl
 
-private lemma computableInPolyTime_clauseLitCond (b : Bool) :
-    ComputableInPolyTime
-      (fun p : List (ℕ × Bool) × ℕ ↦ p.1.any fun l ↦ decide (l = (p.2, b)))
-      (encPair (encList (encPair encNat encBool)) encNat) encBool :=
-  anyWithInput (test := fun p l ↦ decide (l = (p.2, b)))
-    (fst (encList (encPair encNat encBool)) encNat)
-    (ComputableInPolyTime.decide_eq'
-      (snd (encPair (encList (encPair encNat encBool)) encNat) (encPair encNat encBool))
-      (((snd (encList (encPair encNat encBool)) encNat).comp
-        (fst (encPair (encList (encPair encNat encBool)) encNat) (encPair encNat encBool))).prod
-        (ComputableInPolyTime.const b)))
-
-private lemma computableInPolyTime_optEdge :
-    ComputableInPolyTime (fun p : Bool × (ℕ × ℕ) ↦ if p.1 then [p.2] else [])
-      (encPair encBool (encPair encNat encNat)) (encList (encPair encNat encNat)) :=
-  ComputableInPolyTime.ite (fst encBool (encPair encNat encNat))
-    (ComputableInPolyTime.cons' (snd encBool (encPair encNat encNat))
-      (ComputableInPolyTime.const []))
-    (ComputableInPolyTime.const [])
-
-private lemma computableInPolyTime_cnfGetD :
-    ComputableInPolyTime (fun p : CNF ℕ × ℕ ↦ p.1.getD p.2 [])
-      (encPair encCNF encUnary) (encList (encPair encNat encBool)) := by
-  unfold encCNF
-  exact listGetD []
-
-private lemma computableInPolyTime_cnfLen :
-    ComputableInPolyTime (fun φ : CNF ℕ ↦ φ.length) encCNF encUnary :=
-  length_list (encList (encPair encNat encBool))
-
-private lemma computableInPolyTime_clauseEdgeBranch (b : Bool) (r : ℕ) :
-    ComputableInPolyTime
-      (fun q : ((List ℕ × CNF ℕ) × ℕ) × ℕ ↦
-        if (q.1.1.2.getD q.2 []).any (fun l ↦ decide (l = (q.1.1.1.getD q.1.2 0, b))) then
-          [(cubicClauseV q.2, cubicVarV q.1.1.2.length q.1.2 q.2 r)] else [])
-      (encPair (encPair (encPair (encList encNat) encCNF) encUnary) encUnary)
-      (encList (encPair encNat encNat)) := by
-  let encP := encPair (encList encNat) encCNF
-  let encP1 := encPair encP encUnary
-  let encQ := encPair encP1 encUnary
-  have hq11 := (fst encP encUnary).comp (fst encP1 encUnary)
-  have hq111 := (fst (encList encNat) encCNF).comp hq11
-  have hq112 := (snd (encList encNat) encCNF).comp hq11
-  have hq12 := (snd encP encUnary).comp (fst encP1 encUnary)
-  have hq2 := snd encP1 encUnary
-  have hv := listGetDWithInput hq111 hq12 0
-  have hc := computableInPolyTime_cnfGetD.comp (hq112.prod hq2)
-  have hqm := computableInPolyTime_cnfLen.comp hq112
-  have hcl := (ComputableInPolyTime.unary_to_binary.comp (ComputableInPolyTime.unary_add'
-      (ComputableInPolyTime.unary_mul' (ComputableInPolyTime.const 4) ComputableInPolyTime.id')
-      (ComputableInPolyTime.const 1))).comp hq2
-  have hvr := computableInPolyTime_cubicVarV.comp
-      (((hqm.prod hq12).prod hq2).prod (ComputableInPolyTime.const r))
-  exact cpt_congr (computableInPolyTime_optEdge.comp
-    (((computableInPolyTime_clauseLitCond b).comp (hc.prod hv)).prod (hcl.prod hvr)))
-    fun q ↦ by simp only [Function.comp_apply, cubicClauseV]
-
-private lemma computableInPolyTime_baseGraphOf_clauseEdges :
-    ComputableInPolyTime
-      (fun p : List ℕ × CNF ℕ ↦
-        (polyRange p.1.length).flatMap fun i ↦
-          (polyRange p.2.length).flatMap fun j ↦
-            let v := p.1.getD i 0
-            let c := p.2.getD j []
-            (if c.any fun l ↦ decide (l = (v, true)) then
-              [(cubicClauseV j, cubicVarV p.2.length i j 0)] else []) ++
-            (if c.any fun l ↦ decide (l = (v, false)) then
-              [(cubicClauseV j, cubicVarV p.2.length i j 1)] else []))
-      (encPair (encList encNat) encCNF) (encList (encPair encNat encNat)) := by
-  let encP := encPair (encList encNat) encCNF
-  let encP1 := encPair encP encUnary
-  have hstep := (ComputableInPolyTime.listAppend (encPair encNat encNat)).comp
-    ((computableInPolyTime_clauseEdgeBranch true 0).prod
-      (computableInPolyTime_clauseEdgeBranch false 1))
-  have hn : ComputableInPolyTime (fun p : List ℕ × CNF ℕ ↦ p.1.length) encP encUnary :=
-    (length_list encNat).comp (fst (encList encNat) encCNF)
-  have hqm' : ComputableInPolyTime (fun p : (List ℕ × CNF ℕ) × ℕ ↦ p.1.2.length) encP1 encUnary :=
-    ((length_list (encList (encPair encNat encBool))).comp (snd (encList encNat) encCNF)).comp
-      (fst encP encUnary)
-  exact flatMapWith (flatMapWith hstep ComputableInPolyTime.id'
-    (computableInPolyTime_polyRange.comp hqm'))
-    ComputableInPolyTime.id' (computableInPolyTime_polyRange.comp hn)
-
-private lemma computableInPolyTime_baseGraphOf :
-    ComputableInPolyTime (fun p : List ℕ × CNF ℕ ↦ baseGraphOf p.1 p.2)
-      (encPair (encList encNat) encCNF) encGraph := by
-  unfold baseGraphOf
-  have hn : ComputableInPolyTime (fun p : List ℕ × CNF ℕ ↦ p.1.length)
-      (encPair (encList encNat) encCNF) encUnary := (length_list encNat).comp (by fun_prop)
-  have hm : ComputableInPolyTime (fun p : List ℕ × CNF ℕ ↦ p.2.length)
-      (encPair (encList encNat) encCNF) encUnary :=
-    (length_list (encList (encPair encNat encBool))).comp (by fun_prop)
-  have hclV : ComputableInPolyTime cubicClauseV encUnary encNat :=
-    ComputableInPolyTime.unary_to_binary.comp (ComputableInPolyTime.unary_add'
-      (ComputableInPolyTime.unary_mul' (ComputableInPolyTime.const 4) ComputableInPolyTime.id')
-      (ComputableInPolyTime.const 1))
-  have hfstU : ComputableInPolyTime (fun q : ℕ × ℕ ↦ q.1) (encPair encUnary encUnary) encUnary := by
-    fun_prop
-  let encT := encPair (encPair encUnary encUnary) encUnary
-  have h0 := computableInPolyTime_cubicVarV.comp
-    (ComputableInPolyTime.id'.pair (ComputableInPolyTime.const (encIn := encT) (encOut :=
-      encUnary) 0))
-  have h1 := computableInPolyTime_cubicVarV.comp
-    (ComputableInPolyTime.id'.pair (ComputableInPolyTime.const (encIn := encT) (encOut :=
-      encUnary) 1))
-  have h2 := computableInPolyTime_cubicVarV.comp
-    (ComputableInPolyTime.id'.pair (ComputableInPolyTime.const (encIn := encT) (encOut :=
-      encUnary) 2))
-  have hvv : ComputableInPolyTime (fun p : List ℕ × CNF ℕ ↦
-      (polyRange p.1.length).flatMap fun i ↦ (polyRange p.2.length).flatMap fun j ↦
-        [cubicVarV p.2.length i j 0, cubicVarV p.2.length i j 1, cubicVarV p.2.length i j 2])
-      (encPair (encList encNat) encCNF) (encList encNat) :=
-    flatMapWith (flatMapWith (ComputableInPolyTime.cons' h0 (ComputableInPolyTime.cons' h1
-      (ComputableInPolyTime.cons' h2 (ComputableInPolyTime.const (encIn := encT)
-        (encOut := encList encNat) []))))
-      ComputableInPolyTime.id' (computableInPolyTime_polyRange.comp hfstU))
-      hm (computableInPolyTime_polyRange.comp hn)
-  have hcv : ComputableInPolyTime (fun p : List ℕ × CNF ℕ ↦ (polyRange p.2.length).map cubicClauseV)
-      (encPair (encList encNat) encCNF) (encList encNat) :=
-    mapWith (hclV.comp (by fun_prop : ComputableInPolyTime (fun q : Bool × ℕ ↦ q.2)
-      (encPair encBool encUnary) encUnary))
-      (ComputableInPolyTime.const (encOut :=
-        encBool) false) (computableInPolyTime_polyRange.comp hm)
-  have hre : ComputableInPolyTime (fun p : List ℕ × CNF ℕ ↦
-      (polyRange p.1.length).flatMap fun i ↦ (polyRange p.2.length).flatMap fun j ↦
-        let jnext := if j + 1 < p.2.length then j + 1 else 0
-        [(cubicVarV p.2.length i j 0, cubicVarV p.2.length i j 1),
-         (cubicVarV p.2.length i j 1, cubicVarV p.2.length i j 2),
-         (cubicVarV p.2.length i j 2, cubicVarV p.2.length i jnext 0)])
-      (encPair (encList encNat) encCNF) (encList (encPair encNat encNat)) := by
-    have hq2 : ComputableInPolyTime (fun q : (ℕ × ℕ) × ℕ ↦ q.2) encT encUnary := by fun_prop
-    have hq11 : ComputableInPolyTime (fun q : (ℕ × ℕ) × ℕ ↦ q.1.1) encT encUnary := by fun_prop
-    have hq1 : ComputableInPolyTime (fun q : (ℕ × ℕ) × ℕ ↦ q.1)
-        encT (encPair encUnary encUnary) := by fun_prop
-    have hq2p1 := ComputableInPolyTime.unary_add' hq2 (ComputableInPolyTime.const 1)
-    have hjn : ComputableInPolyTime
-        (fun q : (ℕ × ℕ) × ℕ ↦ if q.2 + 1 < q.1.1 then q.2 + 1 else 0) encT encUnary :=
-      cpt_congr (ComputableInPolyTime.ite (ComputableInPolyTime.unary_lt' hq2p1 hq11)
-        hq2p1 (ComputableInPolyTime.const 0)) fun _ ↦ by simp
-    have h0n := computableInPolyTime_cubicVarV.comp
-      ((hq1.prod hjn).prod (ComputableInPolyTime.const (encIn := encT) (encOut := encUnary) 0))
-    have htrip := ComputableInPolyTime.cons' (h0.pair h1) (ComputableInPolyTime.cons' (h1.pair h2)
-      (ComputableInPolyTime.cons' (h2.pair h0n)
-        (ComputableInPolyTime.const (encIn := encT) (encOut :=
-          encList (encPair encNat encNat)) [])))
-    exact flatMapWith (flatMapWith htrip ComputableInPolyTime.id'
-      (computableInPolyTime_polyRange.comp hfstU)) hm (computableInPolyTime_polyRange.comp hn)
-  exact encGraph_mk_polyTime
-    ((ComputableInPolyTime.listAppend encNat).comp (hvv.pair hcv))
-    ((ComputableInPolyTime.listAppend (encPair encNat encNat)).comp
-      (hre.pair computableInPolyTime_baseGraphOf_clauseEdges))
-
-private lemma computableInPolyTime_normClauses :
-    ComputableInPolyTime normClauses encCNF encCNF := by
-  unfold normClauses
-  have hvars : ComputableInPolyTime (fun φ : CNF ℕ ↦ dedupList φ.vars) encCNF (encList encNat) :=
-    computableInPolyTime_dedupList_nat.comp (CNF.computableInPolyTime_vars encNat)
-  have h1 : ComputableInPolyTime (fun φ : CNF ℕ ↦ φ.map dedupList) encCNF encCNF :=
-    mapWith (computableInPolyTime_dedupList_lit.comp (snd encBool _))
-      (ComputableInPolyTime.const (encOut := encBool) false) ComputableInPolyTime.id'
-  have hrng : ComputableInPolyTime (fun φ : CNF ℕ ↦ polyRange (dedupList φ.vars).length)
-      encCNF (encList encUnary) :=
-    computableInPolyTime_polyRange.comp ((length_list encNat).comp hvars)
-  have hmkCl : ComputableInPolyTime (fun p : CNF ℕ × ℕ ↦
-      let vs := dedupList p.1.vars; let n := vs.length
-      dedupList [(vs.getD p.2 0, true), (vs.getD p.2 0, false),
-        (vs.getD (if p.2 + 1 < n then p.2 + 1 else 0) 0, true)])
-      (encPair encCNF encUnary) (encList (encPair encNat encBool)) := by
-    have hvs := hvars.comp (fst encCNF encUnary)
-    have hn := (length_list encNat).comp hvs
-    have hv1 := listGetDWithInput hvs (snd encCNF encUnary) 0
-    have hadd1 := ComputableInPolyTime.unary_add' (snd encCNF encUnary)
-      (ComputableInPolyTime.const (encIn := encPair encCNF encUnary) 1)
-    have hnext : ComputableInPolyTime
-        (fun p : CNF ℕ × ℕ ↦ if p.2 + 1 < (dedupList p.1.vars).length then p.2 + 1 else 0)
-        (encPair encCNF encUnary) encUnary :=
-      cpt_congr (ComputableInPolyTime.ite (ComputableInPolyTime.unary_lt' hadd1 hn)
-        hadd1 (ComputableInPolyTime.const (encIn := encPair encCNF encUnary) 0))
-        fun _ ↦ by simp
-    have hv2 := listGetDWithInput hvs hnext 0
-    have hl1 := hv1.prod (ComputableInPolyTime.const (encIn := encPair encCNF encUnary)
-      (encOut := encBool) true)
-    have hl2 := hv1.prod (ComputableInPolyTime.const (encIn := encPair encCNF encUnary)
-      (encOut := encBool) false)
-    have hl3 := hv2.prod (ComputableInPolyTime.const (encIn := encPair encCNF encUnary)
-      (encOut := encBool) true)
-    exact computableInPolyTime_dedupList_lit.comp (ComputableInPolyTime.cons' hl1
-      (ComputableInPolyTime.cons' hl2 (ComputableInPolyTime.cons' hl3
-        (ComputableInPolyTime.const (encIn := encPair encCNF encUnary)
-          (encOut := encList (encPair encNat encBool)) []))))
-  have h2 := mapWith hmkCl ComputableInPolyTime.id' hrng
-  have h1' : ComputableInPolyTime (fun φ : CNF ℕ ↦ φ.map dedupList)
-      encCNF (encList (encList (encPair encNat encBool))) := h1
-  exact (ComputableInPolyTime.listAppend (encList (encPair encNat encBool))).comp (h1'.prod h2)
-
-private lemma computableInPolyTime_dsBranch :
-    ComputableInPolyTime
-      (fun p : (Bool × Bool) × DominatingSetInstance ↦
-        if p.1.1 then ⟨k4Graph, 1⟩ else if !p.1.2 then ⟨k4Graph, 0⟩ else p.2)
-      (encPair (encPair encBool encBool) encDominatingSet) encDominatingSet :=
-  ComputableInPolyTime.ite
-    ((fst encBool encBool).comp (fst (encPair encBool encBool) encDominatingSet))
-    (ComputableInPolyTime.const (⟨k4Graph, 1⟩ : DominatingSetInstance))
-    (ComputableInPolyTime.ite
-      (ComputableInPolyTime.bool_not.comp
-        ((snd encBool encBool).comp (fst (encPair encBool encBool) encDominatingSet)))
-      (ComputableInPolyTime.const (⟨k4Graph, 0⟩ : DominatingSetInstance))
-      (snd (encPair encBool encBool) encDominatingSet))
-
-private lemma computableInPolyTime_isNontrivialThreeCNF :
-    ComputableInPolyTime isNontrivialThreeCNF encCNF encBool := by
-  unfold isNontrivialThreeCNF
-  have h1 := ComputableInPolyTime.unary_lt' (ComputableInPolyTime.const 0)
-    computableInPolyTime_cnfLen
-  have hclen := (length_list (encPair encNat encBool)).comp
-    (snd encCNF (encList (encPair encNat encBool)))
-  have h2 : ComputableInPolyTime
-      (fun φ : CNF ℕ ↦ φ.all fun c ↦ decide (0 < c.length) && decide (c.length ≤ 3))
-      encCNF encBool :=
-    allWithInput (test := fun _ (c : Clause ℕ) ↦ decide (0 < c.length) && decide (c.length ≤ 3))
-      ComputableInPolyTime.id' (bool_and'
-        (ComputableInPolyTime.unary_lt' (ComputableInPolyTime.const 0) hclen)
-        (ComputableInPolyTime.unary_le' hclen (ComputableInPolyTime.const 3)))
-  exact bool_and' h1 h2
-
-private lemma computableInPolyTime_cubicSumU :
-    ComputableInPolyTime (fun l : List ℕ ↦ l.sum) (encList encUnary) encUnary := by
-  have heq : (fun l : List ℕ ↦ (l.flatMap fun n ↦ List.replicate n false).length) =
-      (fun l : List ℕ ↦ l.sum) := by
-    funext l; induction l with | nil => simp | cons a as ih => simp [ih]
-  exact heq ▸ (length_list encBool).comp (flatMapWith
-    (ComputableInPolyTime.replicate (snd encBool encUnary) (ComputableInPolyTime.const false))
-    (ComputableInPolyTime.const (encOut := encBool) false) ComputableInPolyTime.id')
-
-private lemma computableInPolyTime_deficitSum :
-    ComputableInPolyTime
-      (fun B : Graph ↦ (B.vertices.map fun u ↦ 3 - cubicGraphDegBool B u).sum)
-      encGraph encUnary :=
-  computableInPolyTime_cubicSumU.comp
-    (mapWith (ComputableInPolyTime.unary_sub' (ComputableInPolyTime.const 3)
-        computableInPolyTime_cubicGraphDegBool)
-      ComputableInPolyTime.id' (by fun_prop))
-
-private lemma computableInPolyTime_baseOf :
-    ComputableInPolyTime (fun φ : CNF ℕ ↦ baseGraphOf (dedupList φ.vars) (normClauses φ))
-      encCNF encGraph :=
-  cpt_congr (computableInPolyTime_baseGraphOf.comp
-    ((computableInPolyTime_dedupList_nat.comp (CNF.computableInPolyTime_vars encNat)).prod
-      computableInPolyTime_normClauses)) fun _ ↦ by simp only [Function.comp_apply]
-
-private lemma computableInPolyTime_cubicBudget :
-    ComputableInPolyTime
-      (fun φ : CNF ℕ ↦ (dedupList φ.vars).length * (normClauses φ).length +
-        2 * ((baseGraphOf (dedupList φ.vars) (normClauses φ)).vertices.map
-          fun u ↦ 3 - cubicGraphDegBool (baseGraphOf (dedupList φ.vars) (normClauses φ)) u).sum)
-      encCNF encNat :=
-  cpt_congr (ComputableInPolyTime.unary_to_binary.comp (ComputableInPolyTime.unary_add'
-    (ComputableInPolyTime.unary_mul'
-      ((length_list encNat).comp
-        (computableInPolyTime_dedupList_nat.comp (CNF.computableInPolyTime_vars encNat)))
-      (computableInPolyTime_cnfLen.comp computableInPolyTime_normClauses))
-    (ComputableInPolyTime.unary_mul' (ComputableInPolyTime.const 2)
-      (computableInPolyTime_deficitSum.comp computableInPolyTime_baseOf))))
-    fun _ ↦ by simp only [Function.comp_apply]
-
-private lemma computableInPolyTime_mainCubic :
-    ComputableInPolyTime (fun φ : CNF ℕ ↦
-      let vars := dedupList φ.vars; let clauses := normClauses φ
-      let B := baseGraphOf vars clauses
-      (⟨cappedGraphOf B, vars.length * clauses.length +
-        2 * (B.vertices.map fun u ↦ 3 - cubicGraphDegBool B u).sum⟩ : DominatingSetInstance))
-      encCNF encDominatingSet :=
-  cpt_congr (encDominatingSet_mk_polyTime
-    (cpt_congr (computableInPolyTime_cappedGraphOf.comp computableInPolyTime_baseOf)
-      fun _ ↦ by simp only [Function.comp_apply]) computableInPolyTime_cubicBudget) fun _ ↦ rfl
-
-/-- `toCubicDominatingSet` is computable in polynomial time. -/
 @[fun_prop]
 theorem computableInPolyTime_toCubicDominatingSet :
-    ComputableInPolyTime toCubicDominatingSet encCNF encDominatingSet :=
-  cpt_congr (computableInPolyTime_dsBranch.comp
-    (((cpt_congr (g := List.isEmpty) (ComputableInPolyTime.unary_le' computableInPolyTime_cnfLen
-      (ComputableInPolyTime.const 0)) fun φ ↦ by cases φ <;> simp).prod
-        computableInPolyTime_isNontrivialThreeCNF).prod computableInPolyTime_mainCubic))
-    fun φ ↦ by simp only [Function.comp_apply, toCubicDominatingSet]
+    ComputableInPolyTime toCubicDominatingSet encCNF encDominatingSet := by
+  have hemp : ComputableInPolyTime (fun φ : CNF ℕ ↦ φ.isEmpty) encCNF encBool :=
+    listIsEmpty' (encList encLit)
+  have hex3 : ComputableInPolyTime isNonemptyExact3 encCNF encBool := by
+    unfold isNonemptyExact3
+    refine bool_and' (bool_not.comp hemp) ?_
+    refine allWithInput id' ?_
+    have hclen : ComputableInPolyTime
+        (fun p : CNF ℕ × Clause ℕ ↦ p.2.length)
+        (encPair encCNF (encList encLit)) encUnary :=
+      (length_list encLit).comp (snd _ _)
+    exact hclen.decide_eq' (const 3)
+  have hmid : ComputableInPolyTime
+      (fun φ : CNF ℕ ↦ (⟨cubicSATGraph φ, 24 * φ.length⟩ : DominatingSetInstance))
+      encCNF encDominatingSet := by
+    have hm24 : ComputableInPolyTime (fun n : ℕ ↦ 24 * n) encUnary encUnary := by fun_prop
+    have h24 : ComputableInPolyTime (fun φ : CNF ℕ ↦ 24 * φ.length) encCNF encNat :=
+      unary_to_binary.comp (hm24.comp (length_list (encList encLit)))
+    exact encDominatingSet_mk_polyTime computableInPolyTime_cubicSATGraph h24
+  unfold toCubicDominatingSet
+  exact ite hemp (const (⟨k4Graph, 1⟩ : DominatingSetInstance))
+    (ite hex3 hmid (const (⟨k4Graph, 0⟩ : DominatingSetInstance)))
 
-/-- Polynomial-time many-one reduction from `ThreeSAT` to `CubicDominatingSet`. -/
-theorem polyTimeReducible_ThreeSAT_CubicDominatingSet :
-    PolyTimeReducible encCNF encDominatingSet ThreeSAT CubicDominatingSet :=
+end CubicPolyTime
+
+section CubicCorrectness
+
+private lemma length_flatten_of_all_three {ψ : CNF ℕ} (h3 : ∀ c ∈ ψ, c.length = 3) :
+    ψ.flatten.length = 3 * ψ.length := by
+  induction ψ with
+  | nil => simp
+  | cons c cs ih =>
+    simp only [List.flatten_cons, List.length_append, List.length_cons,
+      h3 c List.mem_cons_self, ih fun d hd ↦ h3 d (List.mem_cons_of_mem c hd)]
+    omega
+
+private lemma flatten_getElem_three {ψ : CNF ℕ} (h3 : ∀ c ∈ ψ, c.length = 3)
+    {i p : ℕ} (hi : i < ψ.length) (hp : p < 3) :
+    have hlt : 3 * i + p < ψ.flatten.length := by
+      rw [length_flatten_of_all_three h3]; omega
+    have hcl : p < ψ[i].length := by rw [h3 ψ[i] (List.getElem_mem hi)]; exact hp
+    ψ.flatten[3 * i + p] = ψ[i][p] := by
+  induction ψ generalizing i with
+  | nil => simp at hi
+  | cons c cs ih =>
+    have hc3 : c.length = 3 := h3 c List.mem_cons_self
+    have hcs3 : ∀ d ∈ cs, d.length = 3 := fun d hd ↦ h3 d (List.mem_cons_of_mem c hd)
+    cases i with
+    | zero =>
+      simp only [Nat.mul_zero, Nat.zero_add, List.flatten_cons, List.getElem_cons_zero]
+      exact List.getElem_append_left (by omega)
+    | succ i' =>
+      have hi' : i' < cs.length := by simp only [List.length_cons] at hi; omega
+      simp only [List.flatten_cons, List.getElem_cons_succ]
+      rw [List.getElem_append_right (by omega)]
+      have hidx : 3 * (i' + 1) + p - c.length = 3 * i' + p := by omega
+      simpa only [hidx] using ih hcs3 hi'
+
+private lemma occSlots_nodup (L : List (ℕ × Bool)) (v : ℕ) : (occSlots L v).Nodup :=
+  List.nodup_range.filter _
+
+private lemma mem_occSlots_iff {L : List (ℕ × Bool)} {v t : ℕ} :
+    t ∈ occSlots L v ↔ t < L.length ∧ (L.getD t (0, false)).1 = v := by
+  simp [occSlots]
+
+private lemma length_occSlots_two_le {φ : CNF ℕ} {v s : ℕ}
+    (hs : s ∈ occSlots (φ ++ φ).flatten v) :
+    2 ≤ (occSlots (φ ++ φ).flatten v).length := by
+  have hflat : (φ ++ φ).flatten = φ.flatten ++ φ.flatten := List.flatten_append
+  set A := φ.flatten
+  obtain ⟨hs_lt, hs_var⟩ := mem_occSlots_iff.mp hs
+  rw [hflat] at hs_var
+  rw [hflat, List.length_append] at hs_lt
+  by_cases hleft : s < A.length
+  · have ht_mem : s + A.length ∈ occSlots (φ ++ φ).flatten v := by
+      rw [mem_occSlots_iff, hflat]
+      have h1 : (A ++ A).getD s (0, false) = A[s] := by
+        rw [List.getD_eq_getElem _ _ (by rw [List.length_append]; omega),
+          List.getElem_append_left hleft]
+      have h2 : (A ++ A).getD (s + A.length) (0, false) = A[s] := by
+        rw [List.getD_eq_getElem _ _ (by rw [List.length_append]; omega),
+          List.getElem_append_right (by omega)]
+        simp
+      rw [h2, ← h1]
+      exact ⟨by rw [List.length_append]; omega, hs_var⟩
+    have hne : s ≠ s + A.length := by omega
+    have hsub : ({s, s + A.length} : Finset ℕ) ⊆ (occSlots (φ ++ φ).flatten v).toFinset := by
+      intro x hx
+      simp only [Finset.mem_insert, Finset.mem_singleton] at hx
+      rcases hx with rfl | rfl <;> exact List.mem_toFinset.mpr ‹_›
+    have hcard := Finset.card_le_card hsub
+    rw [Finset.card_pair hne, List.toFinset_card_of_nodup (occSlots_nodup _ _)] at hcard
+    exact hcard
+  · let t := s - A.length
+    have ht_lt : t < A.length := by omega
+    have ht_mem : t ∈ occSlots (φ ++ φ).flatten v := by
+      rw [mem_occSlots_iff, hflat]
+      have h1 : (A ++ A).getD t (0, false) = A[t] := by
+        rw [List.getD_eq_getElem _ _ (by rw [List.length_append]; omega),
+          List.getElem_append_left ht_lt]
+      have h2 : (A ++ A).getD s (0, false) = A[t] := by
+        rw [List.getD_eq_getElem _ _ (by rw [List.length_append]; omega),
+          List.getElem_append_right (by omega)]
+      rw [h1, ← h2]
+      exact ⟨by rw [List.length_append]; omega, hs_var⟩
+    have hne : t ≠ s := by omega
+    have hsub : ({t, s} : Finset ℕ) ⊆ (occSlots (φ ++ φ).flatten v).toFinset := by
+      intro x hx
+      simp only [Finset.mem_insert, Finset.mem_singleton] at hx
+      rcases hx with rfl | rfl <;> exact List.mem_toFinset.mpr ‹_›
+    have hcard := Finset.card_le_card hsub
+    rw [Finset.card_pair hne, List.toFinset_card_of_nodup (occSlots_nodup _ _)] at hcard
+    exact hcard
+
+private lemma nextSlot_props {φ : CNF ℕ} {s : ℕ} (hs : s < (φ ++ φ).flatten.length) :
+    let L := (φ ++ φ).flatten
+    nextSlot L s < L.length ∧
+      (L.getD (nextSlot L s) (0, false)).1 = (L.getD s (0, false)).1 ∧
+      nextSlot L s ≠ s := by
+  intro L
+  set v := (L.getD s (0, false)).1
+  set occ := occSlots L v
+  have hs_occ : s ∈ occ := mem_occSlots_iff.mpr ⟨hs, rfl⟩
+  have hlen2 : 2 ≤ occ.length := length_occSlots_two_le hs_occ
+  have hnd : occ.Nodup := occSlots_nodup L v
+  have hidx_lt : occ.idxOf s < occ.length := List.idxOf_lt_length_iff.mpr hs_occ
+  have hget_idx : occ[occ.idxOf s] = s := List.getElem_idxOf hidx_lt
+  have hnxt_eq : nextSlot L s =
+      if occ.idxOf s + 1 < occ.length then occ.getD (occ.idxOf s + 1) 0 else occ.getD 0 0 := rfl
+  have hnxt_mem : nextSlot L s ∈ occ := by
+    rw [hnxt_eq]
+    split_ifs with hlt
+    · rw [List.getD_eq_getElem _ _ hlt]
+      exact List.getElem_mem hlt
+    · rw [List.getD_eq_getElem _ _ (by omega)]
+      exact List.getElem_mem (by omega)
+  obtain ⟨hnxt_lt, hnxt_var⟩ := mem_occSlots_iff.mp hnxt_mem
+  refine ⟨hnxt_lt, hnxt_var, ?_⟩
+  rw [hnxt_eq]
+  split_ifs with hlt
+  · rw [List.getD_eq_getElem _ _ hlt]
+    intro heq
+    have := (List.Nodup.getElem_inj_iff hnd).mp (heq.trans hget_idx.symm)
+    omega
+  · rw [List.getD_eq_getElem _ _ (by omega)]
+    intro heq
+    have := (List.Nodup.getElem_inj_iff hnd).mp (heq.trans hget_idx.symm)
+    omega
+
+private lemma nextSlot_exists_unique_preimage {φ : CNF ℕ} {s' : ℕ}
+    (hs' : s' < (φ ++ φ).flatten.length) :
+    ∃! s, s < (φ ++ φ).flatten.length ∧ nextSlot (φ ++ φ).flatten s = s' := by
+  set L := (φ ++ φ).flatten
+  set v := (L.getD s' (0, false)).1
+  set occ := occSlots L v
+  have hs'_occ : s' ∈ occ := mem_occSlots_iff.mpr ⟨hs', rfl⟩
+  have hlen2 : 2 ≤ occ.length := length_occSlots_two_le hs'_occ
+  have hnd : occ.Nodup := occSlots_nodup L v
+  set k := occ.idxOf s'
+  have hk_lt : k < occ.length := List.idxOf_lt_length_iff.mpr hs'_occ
+  have hk_eq : occ[k] = s' := List.getElem_idxOf hk_lt
+  let i : ℕ := if k = 0 then occ.length - 1 else k - 1
+  have hi_lt : i < occ.length := by dsimp [i]; split_ifs <;> omega
+  let s₀ := occ[i]
+  obtain ⟨hs₀_lt, hs₀_var⟩ := mem_occSlots_iff.mp (List.getElem_mem hi_lt)
+  have hs₀_nxt : nextSlot L s₀ = s' := by
+    dsimp only [nextSlot]
+    rw [hs₀_var]
+    change (if occ.idxOf s₀ + 1 < occ.length then occ.getD (occ.idxOf s₀ + 1) 0
+      else occ.getD 0 0) = s'
+    have hidx_eq : occ.idxOf s₀ = i := hnd.idxOf_getElem i hi_lt
+    rw [hidx_eq]
+    dsimp only [i]
+    split_ifs with hk0 hlt hlt
+    · omega
+    · rw [List.getD_eq_getElem _ _ (by omega)]
+      simpa [hk0] using hk_eq
+    · rw [List.getD_eq_getElem _ _ hlt]
+      have hik : k - 1 + 1 = k := by omega
+      simpa [hik] using hk_eq
+    · omega
+  refine ⟨s₀, ⟨hs₀_lt, hs₀_nxt⟩, fun s ⟨hs_lt, hs_nxt⟩ ↦ ?_⟩
+  have hprops := nextSlot_props hs_lt
+  have hs_var : (L.getD s (0, false)).1 = v := by
+    dsimp [v]
+    rw [← hs_nxt]
+    exact hprops.2.1.symm
+  have hs_occ : s ∈ occ := mem_occSlots_iff.mpr ⟨hs_lt, hs_var⟩
+  set j := occ.idxOf s
+  have hj_lt : j < occ.length := List.idxOf_lt_length_iff.mpr hs_occ
+  have hj_eq : occ[j] = s := List.getElem_idxOf hj_lt
+  dsimp only [nextSlot] at hs_nxt
+  rw [hs_var] at hs_nxt
+  change (if j + 1 < occ.length then occ.getD (j + 1) 0 else occ.getD 0 0) = s' at hs_nxt
+  rw [← hk_eq] at hs_nxt
+  have hji : j = i := by
+    split_ifs at hs_nxt with hlt
+    · rw [List.getD_eq_getElem _ _ hlt] at hs_nxt
+      have hjk := (List.Nodup.getElem_inj_iff hnd).mp hs_nxt
+      dsimp [i]
+      split_ifs with hk0 <;> omega
+    · rw [List.getD_eq_getElem _ _ (by omega)] at hs_nxt
+      have hjk := (List.Nodup.getElem_inj_iff hnd).mp hs_nxt
+      dsimp [i]
+      split_ifs with hk0 <;> omega
+  exact hj_eq.symm.trans (by simp only [hji]; rfl)
+
+private lemma nextSlot_cycle_const {φ : CNF ℕ} {v : ℕ} {P : ℕ → Prop}
+    (hstep : ∀ s ∈ occSlots (φ ++ φ).flatten v, P s → P (nextSlot (φ ++ φ).flatten s))
+    {s₀ : ℕ} (hs₀ : s₀ ∈ occSlots (φ ++ φ).flatten v) (hP₀ : P s₀) :
+    ∀ s ∈ occSlots (φ ++ φ).flatten v, P s := by
+  set L := (φ ++ φ).flatten
+  set occ := occSlots L v
+  have hlen2 : 2 ≤ occ.length := length_occSlots_two_le hs₀
+  have hnd : occ.Nodup := occSlots_nodup L v
+  have hnext_at : ∀ j (hj : j < occ.length),
+      nextSlot L occ[j] = if j + 1 < occ.length then occ.getD (j + 1) 0 else occ.getD 0 0 := by
+    intro j hj
+    obtain ⟨_, hvar⟩ := mem_occSlots_iff.mp (List.getElem_mem hj)
+    dsimp only [nextSlot]
+    rw [hvar]
+    change (if occ.idxOf occ[j] + 1 < occ.length then
+      occ.getD (occ.idxOf occ[j] + 1) 0 else occ.getD 0 0) = _
+    rw [hnd.idxOf_getElem j hj]
+  have hfwd : ∀ a b (hb : b < occ.length) (hab : a ≤ b),
+      P (occ[a]'(Nat.lt_of_le_of_lt hab hb)) → P occ[b] := by
+    intro a b hb hab hPa
+    obtain ⟨d, rfl⟩ := Nat.exists_eq_add_of_le hab
+    induction d with
+    | zero => simpa using hPa
+    | succ d ih =>
+      have hd_lt : a + d < occ.length := by omega
+      have hPd : P occ[a + d] := ih hd_lt (by omega) hPa
+      have h1 := hstep occ[a + d] (List.getElem_mem hd_lt) hPd
+      rw [hnext_at (a + d) hd_lt] at h1
+      split_ifs at h1 with hlt
+      · rw [List.getD_eq_getElem _ _ hlt] at h1
+        have hidx : a + d + 1 = a + (d + 1) := by omega
+        simpa only [hidx] using h1
+      · omega
+  set i₀ := occ.idxOf s₀
+  have hi₀_lt : i₀ < occ.length := List.idxOf_lt_length_iff.mpr hs₀
+  have hi₀_eq : occ[i₀] = s₀ := List.getElem_idxOf hi₀_lt
+  have hlast : P (occ[occ.length - 1]'(by omega)) :=
+    hfwd i₀ (occ.length - 1) (by omega) (by omega) (hi₀_eq.symm ▸ hP₀)
+  have h0 : P (occ[0]'(by omega)) := by
+    have h1 := hstep (occ[occ.length - 1]'(by omega)) (List.getElem_mem (by omega)) hlast
+    rw [hnext_at (occ.length - 1) (by omega)] at h1
+    split_ifs at h1 with hlt
+    · omega
+    · rw [List.getD_eq_getElem _ _ (by omega)] at h1
+      exact h1
+  intro s hs
+  set j := occ.idxOf s
+  have hj_lt : j < occ.length := List.idxOf_lt_length_iff.mpr hs
+  have hj_eq : occ[j] = s := List.getElem_idxOf hj_lt
+  rw [← hj_eq]
+  exact hfwd 0 j hj_lt (Nat.zero_le j) h0
+
+private lemma mem_cubicSATGraph_vertices {φ : CNF ℕ} {w : ℕ} :
+    w ∈ (cubicSATGraph φ).vertices ↔
+      (∃ s < 3 * (φ ++ φ).length, ∃ u < 13, w = gadVert s u) ∨
+      (∃ i < (φ ++ φ).length, w = ternVert i) ∨
+      (∃ s < 3 * (φ ++ φ).length, w = binVert s) := by
+  simp only [cubicSATGraph, List.mem_append, List.mem_flatMap, List.mem_map, List.mem_range,
+    or_assoc]
+  exact ⟨by rintro (⟨s, hs, u, hu, rfl⟩ | ⟨i, hi, rfl⟩ | ⟨s, hs, rfl⟩);
+            exacts [Or.inl ⟨s, hs, u, hu, rfl⟩, Or.inr (Or.inl ⟨i, hi, rfl⟩),
+              Or.inr (Or.inr ⟨s, hs, rfl⟩)],
+         by rintro (⟨s, hs, u, hu, rfl⟩ | ⟨i, hi, rfl⟩ | ⟨s, hs, rfl⟩);
+            exacts [Or.inl ⟨s, hs, u, hu, rfl⟩, Or.inr (Or.inl ⟨i, hi, rfl⟩),
+              Or.inr (Or.inr ⟨s, hs, rfl⟩)]⟩
+
+private lemma mem_cubicSATGraph_edges {φ : CNF ℕ} {x y : ℕ} :
+    (x, y) ∈ (cubicSATGraph φ).edges ↔
+      (∃ s < 3 * (φ ++ φ).length, ∃ e ∈ h13Edges, x = gadVert s e.1 ∧ y = gadVert s e.2) ∨
+      (∃ i < (φ ++ φ).length, ∃ p ∈ ([0, 1, 2] : List ℕ),
+        x = ternVert i ∧ y = gadVert (3 * i + p) 0) ∨
+      (∃ s < 3 * (φ ++ φ).length,
+        (x = binVert s ∧ y = gadVert s (negPort (φ ++ φ).flatten s)) ∨
+        (x = binVert s ∧
+          y = gadVert (nextSlot (φ ++ φ).flatten s)
+            (posBinPort (φ ++ φ).flatten (nextSlot (φ ++ φ).flatten s)))) ∨
+      (∃ t < 3 * φ.length, x = binVert (2 * t) ∧ y = binVert (2 * t + 1)) := by
+  simp only [cubicSATGraph, List.mem_append, List.mem_flatMap, List.mem_map, List.mem_range,
+    List.mem_cons, List.not_mem_nil, or_false, Prod.mk.injEq, or_assoc]
+  exact ⟨by rintro (⟨s, hs, e, he, rfl, rfl⟩ | ⟨i, hi, p, hp, rfl, rfl⟩ |
+              ⟨s, hs, ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩⟩ | ⟨t, ht, rfl, rfl⟩)
+            · exact Or.inl ⟨s, hs, e, he, rfl, rfl⟩
+            · exact Or.inr (Or.inl ⟨i, hi, p, hp, rfl, rfl⟩)
+            · exact Or.inr (Or.inr (Or.inl ⟨s, hs, Or.inl ⟨rfl, rfl⟩⟩))
+            · exact Or.inr (Or.inr (Or.inl ⟨s, hs, Or.inr ⟨rfl, rfl⟩⟩))
+            · exact Or.inr (Or.inr (Or.inr ⟨t, ht, rfl, rfl⟩)),
+         by rintro (⟨s, hs, e, he, rfl, rfl⟩ | ⟨i, hi, p, hp, rfl, rfl⟩ |
+              ⟨s, hs, ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩⟩ | ⟨t, ht, rfl, rfl⟩)
+            · exact Or.inl ⟨s, hs, e, he, rfl, rfl⟩
+            · exact Or.inr (Or.inl ⟨i, hi, p, hp, rfl, rfl⟩)
+            · exact Or.inr (Or.inr (Or.inl ⟨s, hs, Or.inl ⟨rfl, rfl⟩⟩))
+            · exact Or.inr (Or.inr (Or.inl ⟨s, hs, Or.inr ⟨rfl, rfl⟩⟩))
+            · exact Or.inr (Or.inr (Or.inr ⟨t, ht, rfl, rfl⟩))⟩
+
+private lemma h13Edges_bounds {e : ℕ × ℕ} (he : e ∈ h13Edges) :
+    e.1 < 13 ∧ e.2 < 13 ∧ e.1 ≠ e.2 := by
+  simp only [h13Edges, List.mem_cons, List.not_mem_nil, or_false] at he
+  rcases he with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide
+
+private lemma gadVert_inj {s₁ u₁ s₂ u₂ : ℕ} (hu₁ : u₁ < 16) (hu₂ : u₂ < 16)
+    (h : gadVert s₁ u₁ = gadVert s₂ u₂) : s₁ = s₂ ∧ u₁ = u₂ := by
+  dsimp [gadVert] at h; omega
+
+private lemma negPort_lt (L : List (ℕ × Bool)) (s : ℕ) : negPort L s < 16 := by
+  unfold negPort; split_ifs <;> omega
+
+private lemma posBinPort_lt (L : List (ℕ × Bool)) (s : ℕ) : posBinPort L s < 16 := by
+  unfold posBinPort; split_ifs <;> omega
+
+private lemma negPort_one_two (L : List (ℕ × Bool)) (s : ℕ) :
+    negPort L s = 1 ∨ negPort L s = 2 := by
+  unfold negPort; split_ifs <;> omega
+
+private lemma posBinPort_one_two (L : List (ℕ × Bool)) (s : ℕ) :
+    posBinPort L s = 1 ∨ posBinPort L s = 2 := by
+  unfold posBinPort; split_ifs <;> omega
+
+/-- Complete characterization of neighbors of a gadget vertex `gadVert s u` (`u < 13`). -/
+private lemma cubicSATGraph_adj_gad_iff {φ : CNF ℕ} {s u z : ℕ}
+    (hs : s < 3 * (φ ++ φ).length) (hu : u < 13) :
+    (cubicSATGraph φ).toSimpleGraph.Adj (gadVert s u) z ↔
+      (∃ v, ∃ hv : v < 13, h13Adj ⟨u, hu⟩ ⟨v, hv⟩ = true ∧ z = gadVert s v) ∨
+      (u = 0 ∧ z = ternVert (s / 3)) ∨
+      (u = negPort (φ ++ φ).flatten s ∧ z = binVert s) ∨
+      (∃ sp < 3 * (φ ++ φ).length,
+        nextSlot (φ ++ φ).flatten sp = s ∧
+          u = posBinPort (φ ++ φ).flatten s ∧ z = binVert sp) := by
+  rw [Graph.toSimpleGraph_adj]
+  constructor
+  · rintro ⟨_, h | h⟩ <;> rw [mem_cubicSATGraph_edges] at h
+    · rcases h with ⟨s', _, e, he, hx, hy⟩ | ⟨_, _, _, _, hx, _⟩ |
+        ⟨_, _, ⟨hx, _⟩ | ⟨hx, _⟩⟩ | ⟨_, _, hx, _⟩
+      · obtain ⟨he1, he2, _⟩ := h13Edges_bounds he
+        obtain ⟨rfl, rfl⟩ := gadVert_inj (by omega) (by omega) hx
+        refine Or.inl ⟨e.2, he2, ?_, hy⟩
+        simp only [h13Adj, List.any_eq_true, decide_eq_true_eq]
+        exact ⟨e, he, Or.inl ⟨rfl, rfl⟩⟩
+      · dsimp [gadVert, ternVert] at hx; omega
+      · dsimp [gadVert, binVert] at hx; omega
+      · dsimp [gadVert, binVert] at hx; omega
+      · dsimp [gadVert, binVert] at hx; omega
+    · rcases h with ⟨s', _, e, he, hy, hx⟩ | ⟨i, _, p, hp, hy, hx⟩ |
+        ⟨sp, hsp, ⟨hy, hx⟩ | ⟨hy, hx⟩⟩ | ⟨_, _, _, hx⟩
+      · obtain ⟨he1, he2, _⟩ := h13Edges_bounds he
+        obtain ⟨rfl, rfl⟩ := gadVert_inj (by omega) (by omega) hx
+        refine Or.inl ⟨e.1, he1, ?_, hy⟩
+        simp only [h13Adj, List.any_eq_true, decide_eq_true_eq]
+        exact ⟨e, he, Or.inr ⟨rfl, rfl⟩⟩
+      · simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
+        obtain ⟨hs_eq, hu_eq⟩ := gadVert_inj (by omega) (by omega) hx
+        have hi_eq : i = s / 3 := by omega
+        exact Or.inr (Or.inl ⟨hu_eq, hy.trans (congrArg ternVert hi_eq)⟩)
+      · obtain ⟨rfl, hu_eq⟩ := gadVert_inj (by omega) (negPort_lt _ _) hx
+        exact Or.inr (Or.inr (Or.inl ⟨hu_eq, hy⟩))
+      · obtain ⟨hnxt, hu_eq⟩ := gadVert_inj (by omega) (posBinPort_lt _ _) hx
+        exact Or.inr (Or.inr (Or.inr ⟨sp, hsp, hnxt.symm, hnxt ▸ hu_eq, hy⟩))
+      · dsimp [gadVert, binVert] at hx; omega
+  · rintro (⟨v, hv, hadj, rfl⟩ | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ | ⟨sp, hsp, hnxt, rfl, rfl⟩)
+    · simp only [h13Adj, List.any_eq_true, decide_eq_true_eq] at hadj
+      obtain ⟨e, he, ⟨he1, he2⟩ | ⟨he1, he2⟩⟩ := hadj
+      · obtain ⟨_, _, hne⟩ := h13Edges_bounds he
+        exact ⟨by dsimp [gadVert]; omega,
+          Or.inl (mem_cubicSATGraph_edges.mpr (Or.inl ⟨s, hs, e, he, by simp [he1],
+            by simp [he2]⟩))⟩
+      · obtain ⟨_, _, hne⟩ := h13Edges_bounds he
+        exact ⟨by dsimp [gadVert]; omega,
+          Or.inr (mem_cubicSATGraph_edges.mpr (Or.inl ⟨s, hs, e, he, by simp [he1],
+            by simp [he2]⟩))⟩
+    · have hi : s / 3 < (φ ++ φ).length := by omega
+      have hp : s % 3 ∈ ([0, 1, 2] : List ℕ) := by simp; omega
+      exact ⟨by dsimp [gadVert, ternVert]; omega,
+        Or.inr (mem_cubicSATGraph_edges.mpr (Or.inr (Or.inl ⟨s / 3, hi, s % 3, hp, rfl,
+          by congr 1; omega⟩)))⟩
+    · exact ⟨by dsimp [gadVert, binVert]; omega,
+        Or.inr (mem_cubicSATGraph_edges.mpr (Or.inr (Or.inr (Or.inl ⟨s, hs,
+          Or.inl ⟨rfl, rfl⟩⟩))))⟩
+    · exact ⟨by dsimp [gadVert, binVert]; omega,
+        Or.inr (mem_cubicSATGraph_edges.mpr (Or.inr (Or.inr (Or.inl ⟨sp, hsp,
+          Or.inr ⟨rfl, by rw [hnxt]⟩⟩))))⟩
+
+private lemma cubicSATGraph_adj_gad_gad {φ : CNF ℕ} {s₁ u₁ s₂ u₂ : ℕ}
+    (hu₁ : u₁ < 13) (hu₂ : u₂ < 13) (hs₁ : s₁ < 3 * (φ ++ φ).length) :
+    (cubicSATGraph φ).toSimpleGraph.Adj (gadVert s₁ u₁) (gadVert s₂ u₂) ↔
+      s₁ = s₂ ∧ h13Adj ⟨u₁, hu₁⟩ ⟨u₂, hu₂⟩ = true := by
+  rw [cubicSATGraph_adj_gad_iff hs₁ hu₁]
+  constructor
+  · rintro (⟨v, hv, hadj, heq⟩ | ⟨_, heq⟩ | ⟨_, heq⟩ | ⟨_, _, _, _, heq⟩)
+    · obtain ⟨rfl, rfl⟩ := gadVert_inj (by omega) (by omega) heq
+      exact ⟨rfl, hadj⟩
+    · dsimp [gadVert, ternVert] at heq; omega
+    · dsimp [gadVert, binVert] at heq; omega
+    · dsimp [gadVert, binVert] at heq; omega
+  · rintro ⟨rfl, hadj⟩
+    exact Or.inl ⟨u₂, hu₂, hadj, rfl⟩
+
+private lemma cubicSATGraph_adj_tern_iff {φ : CNF ℕ} {i z : ℕ} (hi : i < (φ ++ φ).length) :
+    (cubicSATGraph φ).toSimpleGraph.Adj (ternVert i) z ↔
+      ∃ p < 3, z = gadVert (3 * i + p) 0 := by
+  rw [Graph.toSimpleGraph_adj]
+  constructor
+  · rintro ⟨_, h | h⟩ <;> rw [mem_cubicSATGraph_edges] at h
+    · rcases h with ⟨_, _, _, _, hx, _⟩ | ⟨i', _, p, hp, hx, hy⟩ |
+        ⟨_, _, ⟨hx, _⟩ | ⟨hx, _⟩⟩ | ⟨_, _, hx, _⟩
+      · dsimp [ternVert, gadVert] at hx; omega
+      · have hi_eq : i' = i := by dsimp [ternVert] at hx; omega
+        subst i'
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hp
+        exact ⟨p, by rcases hp with rfl | rfl | rfl <;> omega, hy⟩
+      · dsimp [ternVert, binVert] at hx; omega
+      · dsimp [ternVert, binVert] at hx; omega
+      · dsimp [ternVert, binVert] at hx; omega
+    · rcases h with ⟨_, _, _, _, _, hx⟩ | ⟨_, _, _, _, _, hx⟩ |
+        ⟨_, _, ⟨_, hx⟩ | ⟨_, hx⟩⟩ | ⟨_, _, _, hx⟩ <;>
+        dsimp [ternVert, gadVert, binVert] at hx <;> omega
+  · rintro ⟨p, hp, rfl⟩
+    have hp_mem : p ∈ ([0, 1, 2] : List ℕ) := by simp; omega
+    exact ⟨by dsimp [ternVert, gadVert]; omega,
+      Or.inl (mem_cubicSATGraph_edges.mpr (Or.inr (Or.inl ⟨i, hi, p, hp_mem, rfl, rfl⟩)))⟩
+
+private lemma cubicSATGraph_adj_bin_iff {φ : CNF ℕ} {s z : ℕ} (hs : s < 3 * (φ ++ φ).length) :
+    (cubicSATGraph φ).toSimpleGraph.Adj (binVert s) z ↔
+      z = gadVert s (negPort (φ ++ φ).flatten s) ∨
+      z = gadVert (nextSlot (φ ++ φ).flatten s)
+        (posBinPort (φ ++ φ).flatten (nextSlot (φ ++ φ).flatten s)) ∨
+      z = binVert (if s % 2 = 0 then s + 1 else s - 1) := by
+  have hlen : (φ ++ φ).length = 2 * φ.length := by rw [List.length_append]; omega
+  rw [Graph.toSimpleGraph_adj]
+  constructor
+  · rintro ⟨_, h | h⟩ <;> rw [mem_cubicSATGraph_edges] at h
+    · rcases h with ⟨_, _, _, _, hx, _⟩ | ⟨_, _, _, _, hx, _⟩ |
+        ⟨s', _, ⟨hx, hy⟩ | ⟨hx, hy⟩⟩ | ⟨t, _, hx, hy⟩
+      · dsimp [binVert, gadVert] at hx; omega
+      · dsimp [binVert, ternVert] at hx; omega
+      · have hs_eq : s' = s := by dsimp [binVert] at hx; omega
+        subst s'; exact Or.inl hy
+      · have hs_eq : s' = s := by dsimp [binVert] at hx; omega
+        subst s'; exact Or.inr (Or.inl hy)
+      · have hs_eq : s = 2 * t := by dsimp [binVert] at hx; omega
+        exact Or.inr (Or.inr (by simp [hs_eq, hy]))
+    · rcases h with ⟨_, _, _, _, _, hx⟩ | ⟨_, _, _, _, _, hx⟩ |
+        ⟨_, _, ⟨_, hx⟩ | ⟨_, hx⟩⟩ | ⟨t, _, hy, hx⟩
+      · dsimp [binVert, gadVert] at hx; omega
+      · dsimp [binVert, gadVert] at hx; omega
+      · dsimp [binVert, gadVert] at hx; omega
+      · dsimp [binVert, gadVert] at hx; omega
+      · have hs_eq : s = 2 * t + 1 := by dsimp [binVert] at hx; omega
+        exact Or.inr (Or.inr (by simp [hs_eq, hy]))
+  · rintro (rfl | rfl | rfl)
+    · exact ⟨by dsimp [binVert, gadVert]; omega,
+        Or.inl (mem_cubicSATGraph_edges.mpr (Or.inr (Or.inr (Or.inl ⟨s, hs,
+          Or.inl ⟨rfl, rfl⟩⟩))))⟩
+    · exact ⟨by dsimp [binVert, gadVert]; omega,
+        Or.inl (mem_cubicSATGraph_edges.mpr (Or.inr (Or.inr (Or.inl ⟨s, hs,
+          Or.inr ⟨rfl, rfl⟩⟩))))⟩
+    · let t := s / 2
+      have ht : t < 3 * φ.length := by omega
+      by_cases hev : s % 2 = 0
+      · have hs2 : s = 2 * t := by omega
+        exact ⟨by dsimp [binVert]; simp [hev],
+          Or.inl (mem_cubicSATGraph_edges.mpr
+            (Or.inr (Or.inr (Or.inr ⟨t, ht, by simp [hs2], by simp [hs2]⟩))))⟩
+      · have hs2 : s = 2 * t + 1 := by omega
+        exact ⟨by dsimp [binVert]; simp [hev]; omega,
+          Or.inr (mem_cubicSATGraph_edges.mpr
+            (Or.inr (Or.inr (Or.inr ⟨t, ht, by simp [hs2], by simp [hs2]⟩))))⟩
+
+private lemma cubicSATGraph_isCubic {φ : CNF ℕ} (_hne : φ ≠ []) (h3 : ∀ c ∈ φ, c.length = 3) :
+    (cubicSATGraph φ).induced.IsRegularOfDegree 3 := by
+  classical
+  have hψ3 : ∀ c ∈ φ ++ φ, c.length = 3 := fun c hc ↦ by
+    rcases List.mem_append.mp hc with h | h <;> exact h3 c h
+  have hL_len : (φ ++ φ).flatten.length = 3 * (φ ++ φ).length := length_flatten_of_all_three hψ3
+  have hlen2 : (φ ++ φ).length = 2 * φ.length := by rw [List.length_append]; omega
+  rintro ⟨w, hw⟩
+  rw [← (cubicSATGraph φ).induced.card_neighborFinset_eq_degree,
+    ← Finset.card_map (Function.Embedding.subtype _)]
+  have hN_eq (S : Finset ℕ)
+      (hS : ∀ z, z ∈ S ↔
+        z ∈ (cubicSATGraph φ).vertices ∧ (cubicSATGraph φ).toSimpleGraph.Adj w z) :
+      ((cubicSATGraph φ).induced.neighborFinset ⟨w, hw⟩).map (Function.Embedding.subtype _) =
+        S := by
+    ext z
+    simp only [Finset.mem_map, Function.Embedding.coe_subtype,
+      _root_.SimpleGraph.mem_neighborFinset, Graph.induced_adj, Subtype.exists, hS]
+    exact ⟨by rintro ⟨z', hz', hadj, rfl⟩; exact ⟨hz', hadj⟩,
+      fun ⟨hz, hadj⟩ ↦ ⟨z, hz, hadj, rfl⟩⟩
+  rcases mem_cubicSATGraph_vertices.mp hw with ⟨s, hs, u, hu, rfl⟩ | ⟨i, hi, rfl⟩ | ⟨s, hs, rfl⟩
+  · -- Gadget vertex `gadVert s u`
+    let intN : Finset ℕ := ((List.finRange 13).filter fun v ↦ h13Adj ⟨u, hu⟩ v).toFinset.image
+      fun v ↦ gadVert s v.1
+    have hint_card : intN.card = if u < 3 then 2 else 3 := by
+      rw [Finset.card_image_of_injective _ fun a b h ↦ Fin.ext
+        (gadVert_inj (by omega) (by omega) h).2,
+        List.toFinset_card_of_nodup ((List.nodup_finRange 13).filter _)]
+      exact h13_internal_deg ⟨u, hu⟩
+    by_cases hu3 : u < 3
+    · have hu_cases : u = 0 ∨ u = 1 ∨ u = 2 := by omega
+      rcases hu_cases with rfl | hu12
+      · -- Port `0`
+        have hi₀ : s / 3 < (φ ++ φ).length := by omega
+        have hext_notMem : ternVert (s / 3) ∉ intN := by
+          simp only [intN, Finset.mem_image]
+          rintro ⟨v, _, heq⟩; dsimp [gadVert, ternVert] at heq; omega
+        rw [hN_eq (insert (ternVert (s / 3)) intN),
+          Finset.card_insert_of_notMem hext_notMem, hint_card]
+        · simp
+        · intro z
+          rw [cubicSATGraph_adj_gad_iff hs hu]
+          simp only [Finset.mem_insert, intN, Finset.mem_image, List.mem_toFinset, List.mem_filter,
+            List.mem_finRange, true_and]
+          constructor
+          · rintro (rfl | ⟨v, hv, rfl⟩)
+            · exact ⟨mem_cubicSATGraph_vertices.mpr (Or.inr (Or.inl ⟨s / 3, hi₀, rfl⟩)),
+                Or.inr (Or.inl rfl)⟩
+            · exact ⟨mem_cubicSATGraph_vertices.mpr (Or.inl ⟨s, hs, v.1, v.2, rfl⟩),
+                Or.inl ⟨v.1, v.2, hv, rfl⟩⟩
+          · rintro ⟨_, (⟨v, hv, hadj, rfl⟩ | rfl | ⟨hneg, _⟩ | ⟨_, _, _, hpos, _⟩)⟩
+            · exact Or.inr ⟨⟨v, hv⟩, hadj, rfl⟩
+            · exact Or.inl rfl
+            · rcases negPort_one_two (φ ++ φ).flatten s with h | h <;> omega
+            · rcases posBinPort_one_two (φ ++ φ).flatten s with h | h <;> omega
+      · -- Port `u ∈ {1, 2}`: unified handling of both binary-clause ports!
+        obtain ⟨sp, ⟨hsp_lt, hsp_nxt⟩, hsp_uniq⟩ :=
+          nextSlot_exists_unique_preimage (hL_len ▸ hs)
+        have hsp3 : sp < 3 * (φ ++ φ).length := hL_len ▸ hsp_lt
+        let useNeg : Bool := decide (u = negPort (φ ++ φ).flatten s)
+        have hport_dich : u = negPort (φ ++ φ).flatten s ↔ u ≠ posBinPort (φ ++ φ).flatten s := by
+          unfold negPort posBinPort
+          rcases hu12 with rfl | rfl <;> split_ifs <;> omega
+        let extB := if useNeg then binVert s else binVert sp
+        have hext_notMem : extB ∉ intN := by
+          simp only [intN, Finset.mem_image]
+          rintro ⟨v, _, heq⟩; dsimp [extB, gadVert, binVert] at heq; split_ifs at heq <;> omega
+        rw [hN_eq (insert extB intN), Finset.card_insert_of_notMem hext_notMem, hint_card]
+        · simp [hu3]
+        · intro z
+          rw [cubicSATGraph_adj_gad_iff hs hu]
+          simp only [Finset.mem_insert, intN, Finset.mem_image, List.mem_toFinset, List.mem_filter,
+            List.mem_finRange, true_and]
+          constructor
+          · rintro (rfl | ⟨v, hv, rfl⟩)
+            · by_cases hneg_u : u = negPort (φ ++ φ).flatten s
+              · have hext_eq : extB = binVert s := by
+                  have huse : useNeg = true := decide_eq_true hneg_u
+                  simp [extB, huse]
+                rw [hext_eq]
+                exact ⟨mem_cubicSATGraph_vertices.mpr (Or.inr (Or.inr ⟨s, hs, rfl⟩)),
+                  Or.inr (Or.inr (Or.inl ⟨hneg_u, rfl⟩))⟩
+              · have hpos_u : u = posBinPort (φ ++ φ).flatten s :=
+                  Classical.not_not.mp (hport_dich.not.mp hneg_u)
+                have hext_eq : extB = binVert sp := by
+                  have huse : useNeg = false := decide_eq_false hneg_u
+                  simp [extB, huse]
+                rw [hext_eq]
+                exact ⟨mem_cubicSATGraph_vertices.mpr (Or.inr (Or.inr ⟨sp, hsp3, rfl⟩)),
+                  Or.inr (Or.inr (Or.inr ⟨sp, hsp3, hsp_nxt, hpos_u, rfl⟩))⟩
+            · exact ⟨mem_cubicSATGraph_vertices.mpr (Or.inl ⟨s, hs, v.1, v.2, rfl⟩),
+                Or.inl ⟨v.1, v.2, hv, rfl⟩⟩
+          · rintro ⟨_, (⟨v, hv, hadj, rfl⟩ | ⟨h0, _⟩ | ⟨hneg_u, rfl⟩ | ⟨sp', hsp', hnxt', hpos_u,
+            rfl⟩)⟩
+            · exact Or.inr ⟨⟨v, hv⟩, hadj, rfl⟩
+            · rcases hu12 with rfl | rfl <;> omega
+            · have huse : useNeg = true := decide_eq_true hneg_u
+              exact Or.inl (by simp [extB, huse])
+            · have hnot_neg : u ≠ negPort (φ ++ φ).flatten s :=
+                fun h ↦ (hport_dich.mp h) hpos_u
+              have huse : useNeg = false := decide_eq_false hnot_neg
+              have hsp_eq : sp' = sp := hsp_uniq sp' ⟨hL_len.symm ▸ hsp', hnxt'⟩
+              exact Or.inl (by simp [extB, huse, hsp_eq])
+    · -- Internal vertex `3 ≤ u < 13`
+      rw [hN_eq intN, hint_card]
+      · simp [hu3]
+      · intro z
+        rw [cubicSATGraph_adj_gad_iff hs hu]
+        simp only [intN, Finset.mem_image, List.mem_toFinset, List.mem_filter,
+          List.mem_finRange, true_and]
+        constructor
+        · rintro ⟨v, hv, rfl⟩
+          exact ⟨mem_cubicSATGraph_vertices.mpr (Or.inl ⟨s, hs, v.1, v.2, rfl⟩),
+            Or.inl ⟨v.1, v.2, hv, rfl⟩⟩
+        · rintro ⟨_, (⟨v, hv, hadj, rfl⟩ | ⟨h0, _⟩ | ⟨hneg, _⟩ | ⟨_, _, _, hpos, _⟩)⟩
+          · exact ⟨⟨v, hv⟩, hadj, rfl⟩
+          · omega
+          · rcases negPort_one_two (φ ++ φ).flatten s with h | h <;> omega
+          · rcases posBinPort_one_two (φ ++ φ).flatten s with h | h <;> omega
+  · -- Ternary clause vertex `ternVert i`
+    let S : Finset ℕ := {gadVert (3 * i) 0, gadVert (3 * i + 1) 0, gadVert (3 * i + 2) 0}
+    rw [hN_eq S]
+    · have h01 : gadVert (3 * i) 0 ≠ gadVert (3 * i + 1) 0 := by dsimp [gadVert]; omega
+      have h02 : gadVert (3 * i) 0 ≠ gadVert (3 * i + 2) 0 := by dsimp [gadVert]; omega
+      have h12 : gadVert (3 * i + 1) 0 ≠ gadVert (3 * i + 2) 0 := by dsimp [gadVert]; omega
+      simp [S, h01, h02, h12]
+    · intro z
+      rw [cubicSATGraph_adj_tern_iff hi]
+      simp only [S, Finset.mem_insert, Finset.mem_singleton]
+      constructor
+      · rintro (rfl | rfl | rfl)
+        · exact ⟨mem_cubicSATGraph_vertices.mpr (Or.inl ⟨3 * i, by omega, 0, by omega, rfl⟩),
+            0, by omega, by simp⟩
+        · exact ⟨mem_cubicSATGraph_vertices.mpr (Or.inl ⟨3 * i + 1, by omega, 0, by omega, rfl⟩),
+            1, by omega, rfl⟩
+        · exact ⟨mem_cubicSATGraph_vertices.mpr (Or.inl ⟨3 * i + 2, by omega, 0, by omega, rfl⟩),
+            2, by omega, rfl⟩
+      · rintro ⟨_, p, hp, rfl⟩
+        have hp_cases : p = 0 ∨ p = 1 ∨ p = 2 := by omega
+        rcases hp_cases with rfl | rfl | rfl <;> simp
+  · -- Binary clause vertex `binVert s`
+    have hprops := nextSlot_props (hL_len ▸ hs)
+    let g₁ := gadVert s (negPort (φ ++ φ).flatten s)
+    let g₂ := gadVert (nextSlot (φ ++ φ).flatten s)
+      (posBinPort (φ ++ φ).flatten (nextSlot (φ ++ φ).flatten s))
+    let b₂ := binVert (if s % 2 = 0 then s + 1 else s - 1)
+    rw [hN_eq {g₁, g₂, b₂}]
+    · have h12 : g₁ ≠ g₂ := fun h ↦
+        hprops.2.2 (gadVert_inj (negPort_lt _ _) (posBinPort_lt _ _) h).1.symm
+      have h13 : g₁ ≠ b₂ := by dsimp [g₁, b₂, gadVert, binVert]; omega
+      have h23 : g₂ ≠ b₂ := by dsimp [g₂, b₂, gadVert, binVert]; omega
+      simp [h12, h13, h23]
+    · intro z
+      rw [cubicSATGraph_adj_bin_iff hs]
+      simp only [Finset.mem_insert, Finset.mem_singleton]
+      constructor
+      · rintro (rfl | rfl | rfl)
+        · exact ⟨mem_cubicSATGraph_vertices.mpr
+            (Or.inl ⟨s, hs, negPort (φ ++ φ).flatten s,
+              by rcases negPort_one_two (φ ++ φ).flatten s with h | h <;> omega, rfl⟩),
+            Or.inl rfl⟩
+        · exact ⟨mem_cubicSATGraph_vertices.mpr
+            (Or.inl ⟨nextSlot (φ ++ φ).flatten s, hL_len ▸ hprops.1,
+              posBinPort (φ ++ φ).flatten (nextSlot (φ ++ φ).flatten s),
+              by rcases posBinPort_one_two (φ ++ φ).flatten (nextSlot (φ ++ φ).flatten s) with
+                h | h <;> omega, rfl⟩),
+            Or.inr (Or.inl rfl)⟩
+        · refine ⟨mem_cubicSATGraph_vertices.mpr (Or.inr (Or.inr ⟨
+            if s % 2 = 0 then s + 1 else s - 1, ?_, rfl⟩)), Or.inr (Or.inr rfl)⟩
+          split_ifs <;> omega
+      · rintro ⟨_, h⟩
+        exact h
+
+private lemma cubicSATGraph_iff_satisfiable {φ : CNF ℕ} (_hne : φ ≠ [])
+    (h3 : ∀ c ∈ φ, c.length = 3) :
+    (⟨cubicSATGraph φ, 24 * φ.length⟩ : DominatingSetInstance) ∈ DominatingSet ↔
+      φ.Satisfiable := by
+  classical
+  have hψ3 : ∀ c ∈ φ ++ φ, c.length = 3 := fun c hc ↦ by
+    rcases List.mem_append.mp hc with h | h <;> exact h3 c h
+  set ψ := φ ++ φ
+  set M := ψ.length
+  set L := ψ.flatten
+  have hM_eq : M = 2 * φ.length := by dsimp [M, ψ]; rw [List.length_append]; omega
+  have hL_len : L.length = 3 * M := length_flatten_of_all_three hψ3
+  have h24 : 24 * φ.length = 12 * M := by omega
+  rw [h24, mem_DominatingSet_iff]
+  constructor
+  · rintro ⟨D, _hDV, hDdom, hDcard⟩
+    let Dgad (s : ℕ) : Finset (Fin 13) :=
+      Finset.univ.filter fun u ↦ gadVert s u.1 ∈ D
+    have hDgad_dom (s : ℕ) (hs : s < 3 * M) : h13DomInternal (Dgad s) := by
+      intro u hu3
+      have hvV : gadVert s u.1 ∈ (cubicSATGraph φ).vertices :=
+        mem_cubicSATGraph_vertices.mpr (Or.inl ⟨s, hs, u.1, u.2, rfl⟩)
+      rcases hDdom _ hvV with hin | ⟨z, hzD, hadj⟩
+      · exact ⟨u, Finset.mem_filter.mpr ⟨Finset.mem_univ u, hin⟩, by simp [h13Closed]⟩
+      · rcases (cubicSATGraph_adj_gad_iff hs u.2).mp hadj with
+          ⟨v, hv, hadj', rfl⟩ | ⟨h0, _⟩ | ⟨hneg, _⟩ | ⟨_, _, _, hpos, _⟩
+        · exact ⟨⟨v, hv⟩, Finset.mem_filter.mpr ⟨Finset.mem_univ _, hzD⟩,
+            by simp [h13Closed, hadj']⟩
+        · omega
+        · rcases negPort_one_two (φ ++ φ).flatten s with h | h <;> omega
+        · rcases posBinPort_one_two (φ ++ φ).flatten s with h | h <;> omega
+    have hDgad_ge (s : ℕ) (hs : s < 3 * M) : 4 ≤ (Dgad s).card :=
+      h13_four_le_card_of_domInternal (hDgad_dom s hs)
+    let allGad : Finset ℕ := (Finset.range (3 * M)).biUnion fun s ↦
+      (Dgad s).image fun u ↦ gadVert s u.1
+    have hallGad_sub : allGad ⊆ D := by
+      intro z hz
+      simp only [allGad, Finset.mem_biUnion, Finset.mem_range, Finset.mem_image] at hz
+      obtain ⟨s, _, u, hu, rfl⟩ := hz
+      exact (Finset.mem_filter.mp hu).2
+    have hallGad_card : allGad.card = ∑ s ∈ Finset.range (3 * M), (Dgad s).card := by
+      rw [Finset.card_biUnion]
+      · refine Finset.sum_congr rfl fun s _ ↦ Finset.card_image_of_injective _ fun a b h ↦
+          Fin.ext (gadVert_inj (by omega) (by omega) h).2
+      · intro s₁ _ s₂ _ hne
+        refine Finset.disjoint_left.mpr fun z hz₁ hz₂ ↦ hne ?_
+        simp only [Finset.mem_image] at hz₁ hz₂
+        obtain ⟨u₁, _, rfl⟩ := hz₁
+        obtain ⟨u₂, _, heq⟩ := hz₂
+        exact (gadVert_inj (by omega) (by omega) heq.symm).1
+    have hsum_ge : 12 * M ≤ ∑ s ∈ Finset.range (3 * M), (Dgad s).card := by
+      calc 12 * M = ∑ _s ∈ Finset.range (3 * M), 4 := by simp; omega
+        _ ≤ ∑ s ∈ Finset.range (3 * M), (Dgad s).card :=
+            Finset.sum_le_sum fun s hs ↦ hDgad_ge s (Finset.mem_range.mp hs)
+    have hallGad_eq : allGad = D :=
+      Finset.eq_of_subset_of_card_le hallGad_sub (by omega)
+    have hDgad_eq4 (s : ℕ) (hs : s < 3 * M) : (Dgad s).card = 4 := by
+      by_contra hne4
+      have hgt : 4 < (Dgad s).card := lt_of_le_of_ne (hDgad_ge s hs) (Ne.symm hne4)
+      have hsum_gt : ∑ _t ∈ Finset.range (3 * M), 4 <
+          ∑ t ∈ Finset.range (3 * M), (Dgad t).card :=
+        Finset.sum_lt_sum (fun t ht ↦ hDgad_ge t (Finset.mem_range.mp ht))
+          ⟨s, Finset.mem_range.mpr hs, hgt⟩
+      have : allGad.card = 12 * M := by rw [hallGad_eq, hDcard]
+      simp only [Finset.sum_const, Finset.card_range, smul_eq_mul] at hsum_gt
+      omega
+    have hnot_clause_in_D (z : ℕ) (hz : z ∈ D) : ∃ s < 3 * M, ∃ u < 13, z = gadVert s u := by
+      rw [← hallGad_eq] at hz
+      simp only [allGad, Finset.mem_biUnion, Finset.mem_range, Finset.mem_image] at hz
+      obtain ⟨s, hs, u, _, rfl⟩ := hz
+      exact ⟨s, hs, u.1, u.2, rfl⟩
+    let posSide (s : ℕ) : Prop :=
+      if (L.getD s (0, false)).2 then (0 : Fin 13) ∈ Dgad s ∨ (1 : Fin 13) ∈ Dgad s
+      else (2 : Fin 13) ∈ Dgad s
+    let negSide (s : ℕ) : Prop :=
+      if (L.getD s (0, false)).2 then (2 : Fin 13) ∈ Dgad s
+      else (0 : Fin 13) ∈ Dgad s ∨ (1 : Fin 13) ∈ Dgad s
+    have hnot_both (s : ℕ) (hs : s < 3 * M) : ¬ (posSide s ∧ negSide s) := by
+      rintro ⟨hp, hn⟩
+      dsimp only [posSide, negSide] at hp hn
+      split_ifs at hp hn
+      · exact h13_port_exclusion (hDgad_dom s hs) (hDgad_eq4 s hs).le hp hn
+      · exact h13_port_exclusion (hDgad_dom s hs) (hDgad_eq4 s hs).le hn hp
+    have hstep_pos (s : ℕ) (hs : s < 3 * M) (hp : posSide s) : posSide (nextSlot L s) := by
+      have hbV : binVert s ∈ (cubicSATGraph φ).vertices :=
+        mem_cubicSATGraph_vertices.mpr (Or.inr (Or.inr ⟨s, hs, rfl⟩))
+      rcases hDdom _ hbV with hbD | ⟨z, hzD, hadj⟩
+      · obtain ⟨_, _, _, _, hbad⟩ := hnot_clause_in_D _ hbD
+        dsimp [binVert, gadVert] at hbad; omega
+      · rcases (cubicSATGraph_adj_bin_iff hs).mp hadj with rfl | rfl | rfl
+        · have hneg_s : negSide s := by
+            dsimp only [negSide, Dgad]
+            unfold negPort at hzD
+            change gadVert s (if (L.getD s (0, false)).2 then 2 else 1) ∈ D at hzD
+            split_ifs at hzD ⊢
+            · exact Finset.mem_filter.mpr ⟨Finset.mem_univ (2 : Fin 13), hzD⟩
+            · exact Or.inr (Finset.mem_filter.mpr ⟨Finset.mem_univ (1 : Fin 13), hzD⟩)
+          exact (hnot_both s hs ⟨hp, hneg_s⟩).elim
+        · set s' := nextSlot L s
+          dsimp only [posSide, Dgad]
+          unfold posBinPort at hzD
+          change gadVert s' (if (L.getD s' (0, false)).2 then 1 else 2) ∈ D at hzD
+          split_ifs at hzD ⊢
+          · exact Or.inr (Finset.mem_filter.mpr ⟨Finset.mem_univ (1 : Fin 13), hzD⟩)
+          · exact Finset.mem_filter.mpr ⟨Finset.mem_univ (2 : Fin 13), hzD⟩
+        · obtain ⟨_, _, _, _, hbad⟩ := hnot_clause_in_D _ hzD
+          dsimp [binVert, gadVert] at hbad; omega
+    let σ : ℕ → Bool := fun v ↦ decide (∃ s ∈ occSlots L v, posSide s)
+    refine ⟨σ, (CNF.eval_eq_true_iff σ φ).mpr fun c hc ↦ ?_⟩
+    obtain ⟨i, hi_φ, rfl⟩ := List.getElem_of_mem hc
+    have hi_M : i < M := by omega
+    have hψ_i : ψ[i] = φ[i] := List.getElem_append_left hi_φ
+    have htV : ternVert i ∈ (cubicSATGraph φ).vertices :=
+      mem_cubicSATGraph_vertices.mpr (Or.inr (Or.inl ⟨i, hi_M, rfl⟩))
+    rcases hDdom _ htV with htD | ⟨z, hzD, hadj⟩
+    · obtain ⟨_, _, _, _, hbad⟩ := hnot_clause_in_D _ htD
+      dsimp [ternVert, gadVert] at hbad; omega
+    · obtain ⟨p, hp_lt, rfl⟩ := (cubicSATGraph_adj_tern_iff hi_M).mp hadj
+      set s := 3 * i + p
+      have hs_M : s < 3 * M := by dsimp [s]; omega
+      have hs_L : s < L.length := by rw [hL_len]; exact hs_M
+      have h0D : (0 : Fin 13) ∈ Dgad s :=
+        Finset.mem_filter.mpr ⟨Finset.mem_univ (0 : Fin 13), hzD⟩
+      have hlit_eq : L.getD s (0, false) =
+          φ[i][p]'(by rw [h3 φ[i] (List.getElem_mem hi_φ)]; exact hp_lt) := by
+        rw [List.getD_eq_getElem _ _ hs_L]
+        have hf := flatten_getElem_three hψ3 hi_M hp_lt
+        simpa [L, hψ_i] using hf
+      set lit := φ[i][p]'(by rw [h3 φ[i] (List.getElem_mem hi_φ)]; exact hp_lt)
+      have hs_occ : s ∈ occSlots L lit.1 := mem_occSlots_iff.mpr ⟨hs_L, by rw [hlit_eq]⟩
+      rw [Clause.eval_eq_true_iff]
+      refine ⟨lit, List.getElem_mem _, ?_⟩
+      cases hpol : lit.2
+      · have hneg_s : negSide s := by
+          dsimp only [negSide]
+          rw [hlit_eq, hpol]
+          exact Or.inl h0D
+        simp only [σ, decide_eq_false_iff_not, not_exists, not_and]
+        intro s₀ hs₀ hp₀
+        have hall := nextSlot_cycle_const
+          (fun t ht hpt ↦ hstep_pos t (hL_len ▸ (mem_occSlots_iff.mp ht).1) hpt)
+          hs₀ hp₀ s hs_occ
+        exact hnot_both s hs_M ⟨hall, hneg_s⟩
+      · have hpos_s : posSide s := by
+          dsimp only [posSide]
+          rw [hlit_eq, hpol]
+          exact Or.inl h0D
+        simp only [σ, decide_eq_true_eq]
+        exact ⟨s, hs_occ, hpos_s⟩
+  · rintro ⟨σ, hσ⟩
+    have hψ_eval : ∀ i (hi : i < M), ψ[i].eval σ = true := by
+      intro i hi
+      have hall := (CNF.eval_eq_true_iff σ φ).mp hσ
+      rcases List.mem_append.mp (List.getElem_mem hi) with h | h <;> exact hall _ h
+    let pickList (s : ℕ) : List ℕ :=
+      let lit := L.getD s (0, false)
+      if σ lit.1 == lit.2 then h13SHi else h13SLo
+    let D : Finset ℕ := (Finset.range (3 * M)).biUnion fun s ↦
+      (pickList s).toFinset.image fun u ↦ gadVert s u
+    have hpick_sub (s : ℕ) : ∀ u ∈ pickList s, u < 13 := by
+      intro u hu
+      dsimp only [pickList] at hu
+      split_ifs at hu
+      · simp only [h13SHi, List.mem_cons, List.not_mem_nil, or_false] at hu
+        rcases hu with rfl | rfl | rfl | rfl <;> omega
+      · simp only [h13SLo, List.mem_cons, List.not_mem_nil, or_false] at hu
+        rcases hu with rfl | rfl | rfl | rfl <;> omega
+    have hpick_card (s : ℕ) : (pickList s).toFinset.card = 4 := by
+      dsimp only [pickList]
+      split_ifs <;> decide
+    refine ⟨D, ?_, ?_, ?_⟩
+    · intro z hz
+      simp only [D, Finset.mem_biUnion, Finset.mem_range, Finset.mem_image,
+        List.mem_toFinset] at hz
+      obtain ⟨s, hs, u, hu, rfl⟩ := hz
+      exact mem_cubicSATGraph_vertices.mpr (Or.inl ⟨s, hs, u, hpick_sub s u hu, rfl⟩)
+    · intro w hw
+      rcases mem_cubicSATGraph_vertices.mp hw with ⟨s, hs, u, hu, rfl⟩ | ⟨i, hi, rfl⟩ |
+        ⟨s, hs, rfl⟩
+      · have hex : ∃ v ∈ pickList s, ∃ hv : v < 13, h13Closed ⟨u, hu⟩ ⟨v, hv⟩ = true := by
+          dsimp only [pickList]
+          split_ifs
+          · exact h13SHi_dom_all ⟨u, hu⟩
+          · exact h13SLo_dom_all ⟨u, hu⟩
+        obtain ⟨v, hv_mem, hv_lt, hcl⟩ := hex
+        have hvD : gadVert s v ∈ D := by
+          simp only [D, Finset.mem_biUnion, Finset.mem_range, Finset.mem_image, List.mem_toFinset]
+          exact ⟨s, hs, v, hv_mem, rfl⟩
+        simp only [h13Closed, Bool.or_eq_true, decide_eq_true_eq, Fin.ext_iff] at hcl
+        rcases hcl with rfl | hadj
+        · exact Or.inl hvD
+        · exact Or.inr ⟨gadVert s v, hvD, (cubicSATGraph_adj_gad_gad hu hv_lt hs).mpr ⟨rfl, hadj⟩⟩
+      · obtain ⟨lit, hlit_mem, hlit_true⟩ := (Clause.eval_eq_true_iff σ ψ[i]).mp (hψ_eval i hi)
+        obtain ⟨p, hp_lt_cl, rfl⟩ := List.getElem_of_mem hlit_mem
+        have hp_lt : p < 3 := by rw [hψ3 ψ[i] (List.getElem_mem hi)] at hp_lt_cl; exact hp_lt_cl
+        set s := 3 * i + p
+        have hs : s < 3 * M := by dsimp [s, M, ψ] at hi ⊢; omega
+        have hs_L : s < L.length := by rw [hL_len]; exact hs
+        have hget : L.getD s (0, false) = ψ[i][p] := by
+          rw [List.getD_eq_getElem _ _ hs_L]
+          exact flatten_getElem_three hψ3 hi hp_lt
+        have h0_mem : 0 ∈ pickList s := by
+          simp only [pickList, hget, hlit_true, beq_self_eq_true, ↓reduceIte, h13SHi,
+            List.mem_cons, true_or]
+        have h0D : gadVert s 0 ∈ D := by
+          simp only [D, Finset.mem_biUnion, Finset.mem_range, Finset.mem_image, List.mem_toFinset]
+          exact ⟨s, hs, 0, h0_mem, rfl⟩
+        exact Or.inr ⟨gadVert s 0, h0D, (cubicSATGraph_adj_tern_iff hi).mpr ⟨p, hp_lt, rfl⟩⟩
+      · have hs_L : s < L.length := hL_len ▸ hs
+        have hprops := nextSlot_props hs_L
+        set v := (L.getD s (0, false)).1
+        cases hσv : σ v
+        · have hmem : negPort L s ∈ pickList s := by
+            dsimp only [pickList, negPort]
+            change _ ∈ (if (σ v == (L.getD s (0, false)).2) then h13SHi else h13SLo)
+            rw [hσv]
+            cases (L.getD s (0, false)).2 <;> simp [h13SHi, h13SLo]
+          have hD_in : gadVert s (negPort L s) ∈ D := by
+            simp only [D, Finset.mem_biUnion, Finset.mem_range, Finset.mem_image, List.mem_toFinset]
+            exact ⟨s, hs, negPort L s, hmem, rfl⟩
+          exact Or.inr ⟨gadVert s (negPort L s), hD_in,
+            (cubicSATGraph_adj_bin_iff hs).mpr (Or.inl rfl)⟩
+        · set s' := nextSlot L s
+          have hs'_M : s' < 3 * M := hL_len ▸ hprops.1
+          have hmem : posBinPort L s' ∈ pickList s' := by
+            dsimp only [pickList, posBinPort]
+            rw [hprops.2.1, hσv]
+            cases (L.getD s' (0, false)).2 <;> simp [h13SHi, h13SLo]
+          have hD_in : gadVert s' (posBinPort L s') ∈ D := by
+            simp only [D, Finset.mem_biUnion, Finset.mem_range, Finset.mem_image, List.mem_toFinset]
+            exact ⟨s', hs'_M, posBinPort L s', hmem, rfl⟩
+          exact Or.inr ⟨gadVert s' (posBinPort L s'), hD_in,
+            (cubicSATGraph_adj_bin_iff hs).mpr (Or.inr (Or.inl rfl))⟩
+    · rw [Finset.card_biUnion]
+      · calc ∑ s ∈ Finset.range (3 * M), ((pickList s).toFinset.image fun u ↦ gadVert s u).card
+            = ∑ s ∈ Finset.range (3 * M), (pickList s).toFinset.card :=
+              Finset.sum_congr rfl fun s _ ↦ Finset.card_image_of_injOn fun a ha b hb h ↦ by
+                have ha' := hpick_sub s a (List.mem_toFinset.mp ha)
+                have hb' := hpick_sub s b (List.mem_toFinset.mp hb)
+                exact (gadVert_inj (by omega) (by omega) h).2
+          _ = ∑ _s ∈ Finset.range (3 * M), 4 :=
+              Finset.sum_congr rfl fun s _ ↦ hpick_card s
+          _ = 12 * M := by simp; omega
+      · intro s₁ _ s₂ _ hne
+        refine Finset.disjoint_left.mpr fun z hz₁ hz₂ ↦ hne ?_
+        simp only [Finset.mem_image, List.mem_toFinset] at hz₁ hz₂
+        obtain ⟨u₁, hu₁, rfl⟩ := hz₁
+        obtain ⟨u₂, hu₂, heq⟩ := hz₂
+        have b₁ := hpick_sub s₁ u₁ hu₁
+        have b₂ := hpick_sub s₂ u₂ hu₂
+        exact (gadVert_inj (by omega) (by omega) heq.symm).1
+
+theorem toCubicDominatingSet_mem_iff (φ : CNF ℕ) :
+    toCubicDominatingSet φ ∈ CubicDominatingSet ↔ φ ∈ ExactThreeSAT := by
+  unfold toCubicDominatingSet
+  by_cases hemp : φ.isEmpty = true
+  · simp only [hemp, ↓reduceIte]
+    have hnil : φ = [] := List.isEmpty_iff.mp hemp
+    subst hnil
+    refine iff_of_true k4Graph_one_mem_CubicDominatingSet ⟨by simp, fun _ ↦ false, rfl⟩
+  · have hempF : φ.isEmpty = false := Bool.eq_false_iff.mpr hemp
+    simp only [hempF, Bool.false_eq_true, ↓reduceIte]
+    by_cases hex3 : isNonemptyExact3 φ = true
+    · simp only [hex3, ↓reduceIte]
+      have hne : φ ≠ [] := fun h ↦ hemp (List.isEmpty_iff.mpr h)
+      have h3 : ∀ c ∈ φ, c.length = 3 := by
+        simp only [isNonemptyExact3, Bool.and_eq_true, List.all_eq_true,
+          decide_eq_true_eq] at hex3
+        exact hex3.2
+      simp only [CubicDominatingSet, Set.mem_ofPred_eq, ExactThreeSAT,
+        cubicSATGraph_isCubic hne h3, true_and, cubicSATGraph_iff_satisfiable hne h3]
+      exact ⟨fun h ↦ ⟨h3, h⟩, fun h ↦ h.2⟩
+    · have hex3F : isNonemptyExact3 φ = false := Bool.eq_false_iff.mpr hex3
+      simp only [hex3F, Bool.false_eq_true, ↓reduceIte]
+      refine iff_of_false k4Graph_zero_notMem_CubicDominatingSet fun ⟨h3, _⟩ ↦ hex3 ?_
+      simp only [isNonemptyExact3, Bool.and_eq_true, Bool.not_eq_true', List.all_eq_true,
+        decide_eq_true_eq]
+      exact ⟨hempF, h3⟩
+
+end CubicCorrectness
+
+/-- `ExactThreeSAT` reduces in polynomial time to `CubicDominatingSet`. -/
+theorem polyTimeReducible_ExactThreeSAT_CubicDominatingSet :
+    PolyTimeReducible encCNF encDominatingSet ExactThreeSAT CubicDominatingSet :=
   ⟨toCubicDominatingSet, computableInPolyTime_toCubicDominatingSet,
     fun φ ↦ (toCubicDominatingSet_mem_iff φ).symm⟩
 
 /-- `CubicDominatingSet` is `NP`-hard. -/
 theorem CubicDominatingSet_npHard : NPHard encDominatingSet CubicDominatingSet :=
-  fun _ enc C hC ↦ (ThreeSAT_npHard enc C hC).trans polyTimeReducible_ThreeSAT_CubicDominatingSet
+  ExactThreeSAT_npHard.trans polyTimeReducible_ExactThreeSAT_CubicDominatingSet
 
-/-- **NP-completeness of Connected Cubic Dominating Set**: `CubicDominatingSet` is `NP`-complete
-under polynomial-time many-one reductions. -/
+/-- **Dominating Set** is `NP`-complete even when restricted to cubic (`3`-regular) graphs. -/
 theorem CubicDominatingSet_npComplete : NPComplete encDominatingSet CubicDominatingSet :=
-  ⟨CubicDominatingSet.mem_NP, CubicDominatingSet_npHard⟩
+  ⟨CubicDominatingSet_mem_NP, CubicDominatingSet_npHard⟩
 
 end CslibFrontier.Complexity
