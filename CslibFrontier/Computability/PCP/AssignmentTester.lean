@@ -1,679 +1,390 @@
 /-
-Copyright (c) 2026 Bolton Bailey, Samuel Schlesinger. All rights reserved.
+Copyright (c) 2026 CslibFrontier Contributors. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
-Authors: Bolton Bailey, Samuel Schlesinger
+Authors: CslibFrontier Contributors
 -/
 
 module
 -- upstream: candidate
 
-public import CslibFrontier.Computability.PCP.LocalTest
-public import CslibFrontier.Foundations.BooleanAnalysis.HadamardTester
-public import CslibFrontier.Foundations.BooleanAnalysis.LongCode
-public import Mathlib.Data.Fin.VecNotation
-import Mathlib.Algebra.BigOperators.Fin
-import CslibFrontier.Foundations.Data.Finset.Expect
-import CslibFrontier.Foundations.Data.Hamming
-import Mathlib.Algebra.Order.BigOperators.Expect
-import Mathlib.Tactic.FinCases
+public import CslibFrontier.Computability.PCP.Encoded.Basic
+
+import Mathlib.Data.Fintype.Card
+import Mathlib.Order.ConditionallyCompleteLattice.Finset
 import Mathlib.Tactic.Linarith
+import Mathlib.Tactic.Ring
 
 /-!
-# The Hadamard assignment tester
+# Alphabet-Polymorphic Assignment Testers and Constraint-Graph Composition
 
-An **assignment tester** [Dinur, Definition 3.1][Dinur2005] for a constraint `C` on the labels of
-the two ends of an edge checks, with a constant number of queries and a constant rejection rate,
-that two tables encode labels satisfying `C`. It is handed the tables and a proof; it accepts the
-encodings of satisfying labels together with an honest proof, and rejects every proof with
-probability at least a constant times the distance of the tables from the encodings of the closest
-satisfying labels. Running it on every edge of a constraint graph over a large alphabet reduces the
-alphabet to a constant one (`PCP.ConstraintGraph.compose`): for this, the number of queries and
-the rejection rate must not depend on the alphabet, however large the proof is.
-
-The tester here, for constraints on labels in a finite type `α`, follows Arora and Barak
-[Arora and Barak, Chapter 22][AroraBarak09] and is built on the Hadamard tester for quadratic
-equations (`BitString.exists_forall_hadamardCode_tensor_eq_of_le_blrAcceptance`).
-
-* A label `a` is encoded by its **long code** `BitString.longCode a`, the dictator `r ↦ r a` on
-  `α → Bool`, which is the Hadamard encoding of the unit vector of `a`. The long codes of distinct
-  labels differ on half of the inputs, so a table within relative distance `1/4` of a long code
-  determines its label (`BitString.eq_of_hammingDist_longCode_lt`).
-* The labels `σ : Fin 2 → α` of the two ends are described by Boolean variables indexed by
-  `Fin 2 × α`, their **one-hot encoding** `HadamardTester.oneHot σ`. The constraint becomes a
-  system of quadratic
-  equations in the variables (`HadamardTester.equationCoeff`): no two variables incompatible with
-  `C` are both set, and an odd number of the variables of each end are set. Its solutions are the
-  one-hot encodings of the labels satisfying `C`
-  (`HadamardTester.forall_hadamardCode_tensor_equationCoeff_iff`). Reading the Hadamard encoding of
-  the one-hot encoding at the vector that is `r` on the variables of an end and zero elsewhere
-  (`HadamardTester.endEmbed`) reads the long code of the label of that end at `r`.
-* The proof consists of a *linear table*, supposedly the Hadamard encoding of the variables, and a
-  *quadratic table*, supposedly that of their tensor square. On independent random strings, the
-  tester `hadamardTester C` runs five checks, each a local test (`PCP.LocalTest`): the linearity
-  test on both tables, the tensor test, the equation test for the quadratic equations of `C`, and
-  the *input test*, which compares the bit of the table of a random end at a random point with the
-  self-corrected read of the linear table at the corresponding vector. It accepts when all five
-  do, and makes `17` queries.
-
-If the tester accepts with probability at least `1 - ρ` for some `ρ < 1/28`, the linear table is
-within `ρ` of the Hadamard encoding of a solution of the equations, which is the one-hot encoding of
-labels satisfying `C`, and the input test puts the tables within distance `3ρ` of the long codes of
-these labels (`HadamardTester.exists_inputDist_le_of_le_acceptProb`). So the tester rejects with
-probability at least `1/28` times the distance of the tables from the long codes of satisfying
-labels (`HadamardTester.exists_inputDist_div_le_one_sub_acceptProb`). As a constraint graph, over
-the alphabet `Bool × (HadamardTester.Query → Bool)` of `2 ^ 18` symbols, it is an assignment tester
-in the sense of Dinur: a labelling violates a proportion of the edges at least `1/476` times that
-distance (`HadamardTester.exists_inputDist_div_le_unsatFrac`).
+Defines assignment testers over arbitrary (finite or infinite) input and output alphabets, together
+with Dinur-style edge-by-edge composition with any finite-edge `Cslib.PCP.ConstraintGraph` and a
+subset-decoding invariant that preserves restricted unsatisfiability values over any non-empty
+target sub-alphabet.
 
 ## Main definitions
 
-* `Cslib.PCP.HadamardTester.oneHot`: the one-hot encoding of the labels of the two ends.
-* `Cslib.PCP.HadamardTester.equationCoeff`, `Cslib.PCP.HadamardTester.equationRhs`: the quadratic
-  equations of a constraint.
-* `Cslib.PCP.HadamardTester.blrTest`, `Cslib.PCP.HadamardTester.tensorTest`,
-  `Cslib.PCP.HadamardTester.equationTest`, `Cslib.PCP.HadamardTester.inputTest`: the checks of the
-  tester, as local tests.
-* `Cslib.PCP.HadamardTester.test`, `Cslib.PCP.hadamardTester`: the five-check conjunction and the
-  assignment tester of a constraint.
-* `Cslib.PCP.HadamardTester.inputDist`: the distance of the tables of a proof from the long codes
-  of labels.
-* `Cslib.PCP.HadamardTester.honestProof`: the proof of satisfying labels.
+* `CslibFrontier.PCP.AssignmentTester`: an `ℓ`-query assignment tester reducing binary constraints
+  over input alphabet `A` to `ℓ`-ary constraints in `D` over output alphabet `Γ`, with error
+  threshold `ζ > 0` and relative Hamming distance `δ > 0`.
+* `CslibFrontier.PCP.composeGraph`: composed constraint graph over tuple alphabet `Fin ℓ → Γ` with
+  `(ℓ + 1) · R · |E|` edges.
+* `CslibFrontier.PCP.unsatValRestricted`: minimum unsatisfied edge fraction over assignments taking
+  values in a restricted subset `S ⊆ α`.
+* `CslibFrontier.PCP.AssignmentTester.SubsetDecoding`: unique `< δ / 2`-ball decoding preserves
+  membership in a sub-alphabet `S ⊆ A` from `W ⊆ Γ`.
 
 ## Main results
 
-* `Cslib.PCP.HadamardTester.forall_hadamardCode_tensor_equationCoeff_iff`: the solutions of the
-  quadratic equations of a constraint are the one-hot encodings of its satisfying labels.
-* `Cslib.PCP.HadamardTester.passes_honestProof`: completeness of the tester.
-* `Cslib.PCP.HadamardTester.exists_inputDist_le_of_le_acceptProb`,
-  `Cslib.PCP.HadamardTester.exists_inputDist_div_le_one_sub_acceptProb`,
-  `Cslib.PCP.HadamardTester.one_div_le_one_sub_acceptProb_of_forall_not`: soundness of the tester.
-* `Cslib.PCP.HadamardTester.satisfies_toConstraintGraph_honestProof`,
-  `Cslib.PCP.HadamardTester.exists_inputDist_div_le_unsatFrac`,
-  `Cslib.PCP.HadamardTester.one_div_le_unsatFrac_of_forall_not`: completeness and soundness of the
-  tester as a constraint graph.
-
-## References
-
-* [I. Dinur, *The PCP theorem by gap amplification*][Dinur2007]
-* [I. Dinur, *The PCP theorem by gap amplification*, ECCC TR05-046, revision 1][Dinur2005]
-* [S. Arora, B. Barak, *Computational Complexity: A Modern Approach*][AroraBarak09]
+* `CslibFrontier.PCP.composeGraph_unsatVal_eq_zero`: completeness of assignment-tester composition.
+* `CslibFrontier.PCP.le_unsatVal_composeGraph`: soundness bound
+  `(ζ / (ℓ + 1)) · UNSAT(G) ≤ UNSAT(composeGraph G cEdge T)`.
+* `CslibFrontier.PCP.le_unsatValRestricted_composeGraph`: restricted-alphabet soundness bound under
+  `AssignmentTester.SubsetDecoding`.
 -/
 
-@[expose] public section
+public section
 
-open Finset
+namespace CslibFrontier.PCP
+
+open Cslib.PCP
 open scoped BigOperators
 
-namespace Cslib.PCP
-
-open BitString
-
-variable {α ι κ : Type*}
-
-namespace HadamardTester
-
-/-! ### The one-hot encoding and the quadratic equations of a constraint -/
-
-/-- The **one-hot encoding** of the labels `σ : Fin 2 → α` of the two ends of an edge, as Boolean
-variables indexed by `Fin 2 × α`: the variable `(b, a)` is set exactly when the end `b` has the
-label `a`. -/
-def oneHot [DecidableEq α] (σ : Fin 2 → α) : Fin 2 × α → Bool :=
-  fun p ↦ decide (σ p.1 = p.2)
-
-@[simp]
-theorem oneHot_apply [DecidableEq α] (σ : Fin 2 → α) (p : Fin 2 × α) :
-    oneHot σ p = decide (σ p.1 = p.2) :=
-  rfl
-
-/-- Two variables, given by an end and a label, are **compatible** with the constraint `C` when
-some labels satisfying `C` set both of them. -/
-def Compatible (C : α → α → Prop) (p p' : Fin 2 × α) : Prop :=
-  ∃ σ : Fin 2 → α, C (σ 0) (σ 1) ∧ σ p.1 = p.2 ∧ σ p'.1 = p'.2
-
-variable [Fintype α] [DecidableEq α]
-
-open Classical in
-/-- The coefficients of the **quadratic equations of the constraint `C`** in the variables `x`, as
-linear equations `hadamardCode (tensor x x) (equationCoeff C e) = equationRhs e` in the tensor
-square of the variables: for every pair of variables incompatible with `C` (`inl`), the equation
-saying that they are not both set, and for every end (`inr`), the equation saying that an odd
-number of its variables are set. Their solutions are the one-hot encodings of the labels
-satisfying `C` (`forall_hadamardCode_tensor_equationCoeff_iff`). -/
-noncomputable def equationCoeff (C : α → α → Prop) :
-    (Fin 2 × α) × (Fin 2 × α) ⊕ Fin 2 → (Fin 2 × α) × (Fin 2 × α) → Bool :=
-  Sum.elim (fun q ↦ if Compatible C q.1 q.2 then 0 else Pi.single q true)
-    fun b ↦ ∑ a, Pi.single ((b, a), (b, a)) true
-
-/-- The right-hand sides of the quadratic equations of a constraint: `0` for the pairs of
-variables, `1` for the ends. -/
-def equationRhs : (Fin 2 × α) × (Fin 2 × α) ⊕ Fin 2 → Bool :=
-  Sum.elim 0 1
-
-open Classical in
-/-- The equation of a pair of variables, read on the tensor square of `x`. -/
-private theorem hadamardCode_tensor_equationCoeff_inl (C : α → α → Prop) (x : Fin 2 × α → Bool)
-    (p p' : Fin 2 × α) :
-    hadamardCode (tensor x x) (equationCoeff C (.inl (p, p'))) =
-      if Compatible C p p' then false else (x p && x p') := by
-  rw [equationCoeff, Sum.elim_inl]
-  split_ifs
-  · rw [hadamardCode_apply, dotProduct_zero, Bool.zero_eq_false]
-  · exact hadamardCode_tensor_single x _ _
-
-/-- The equation of an end, read on the tensor square of `x`: the sum of the variables of the
-end. -/
-private theorem hadamardCode_tensor_equationCoeff_inr (C : α → α → Prop) (x : Fin 2 × α → Bool)
-    (b : Fin 2) :
-    hadamardCode (tensor x x) (equationCoeff C (.inr b)) = ∑ a, x (b, a) := by
-  rw [equationCoeff, Sum.elim_inr, hadamardCode_apply, dotProduct_sum]
-  refine sum_congr rfl fun a _ ↦ ?_
-  rw [← hadamardCode_apply, hadamardCode_tensor_single, Bool.and_self]
-
-open Classical in
-/-- The quadratic equations of `C` on the tensor square of `x` split into the equations of the
-pairs of variables and those of the ends. -/
-private theorem forall_hadamardCode_tensor_equationCoeff_iff_and {C : α → α → Prop}
-    {x : Fin 2 × α → Bool} :
-    (∀ e, hadamardCode (tensor x x) (equationCoeff C e) = equationRhs e) ↔
-      (∀ p p', ¬ Compatible C p p' → (x p && x p') = false) ∧
-        ∀ b, ∑ a, x (b, a) = true := by
-  rw [Sum.forall, Prod.forall]
-  refine and_congr (forall₂_congr fun p p' ↦ ?_) (forall_congr' fun b ↦ ?_)
-  · rw [hadamardCode_tensor_equationCoeff_inl, equationRhs, Sum.elim_inl]
-    exact ite_eq_left_iff
-  · rw [hadamardCode_tensor_equationCoeff_inr, equationRhs, Sum.elim_inr]; rfl
-
-/-- **The quadratic equations of a constraint**: their solutions are exactly the one-hot encodings
-of the labels satisfying the constraint. -/
-theorem forall_hadamardCode_tensor_equationCoeff_iff {C : α → α → Prop}
-    {x : Fin 2 × α → Bool} :
-    (∀ e, hadamardCode (tensor x x) (equationCoeff C e) = equationRhs e) ↔
-      ∃ σ : Fin 2 → α, C (σ 0) (σ 1) ∧ x = oneHot σ := by
-  rw [forall_hadamardCode_tensor_equationCoeff_iff_and]
-  refine ⟨?_, ?_⟩
-  · rintro ⟨hpair, hsum⟩
-    -- Every end has a set variable.
-    have hex (b : Fin 2) : ∃ a, x (b, a) = true := by
-      by_contra! h
-      exact absurd ((sum_eq_zero fun a _ ↦ by simp [h a, Bool.zero_eq_false]).symm.trans (hsum b))
-        (by decide)
-    choose σ hσ using hex
-    -- Two variables of the same end, or of the two ends violating `C`, are never both set.
-    have hboth {p p' : Fin 2 × α} (hp : x p = true) (hp' : x p' = true) : Compatible C p p' :=
-      by_contra fun hpp' ↦ by simpa [hp, hp'] using hpair p p' hpp'
-    refine ⟨σ, ?_, funext fun ⟨b, a⟩ ↦ ?_⟩
-    · obtain ⟨τ, hτ, h0, h1⟩ := hboth (hσ 0) (hσ 1)
-      rwa [funext (Fin.forall_fin_two.2 ⟨h0, h1⟩)] at hτ
-    · by_cases ha : σ b = a
-      · simpa [← ha] using hσ b
-      · simp only [oneHot_apply, decide_eq_false ha, Bool.eq_false_iff]
-        exact fun hx ↦ (hboth hx (hσ b)).elim fun _ ⟨_, hτ, hτ'⟩ ↦ ha (hτ'.symm.trans hτ)
-  · rintro ⟨σ, hσ, rfl⟩
-    refine ⟨fun p p' hpp' ↦ Bool.eq_false_iff.2 fun h ↦ ?_, fun b ↦ ?_⟩
-    · simp only [oneHot_apply, Bool.and_eq_true, decide_eq_true_eq] at h
-      exact hpp' ⟨σ, hσ, h.1, h.2⟩
-    · simpa [oneHot_apply] using
-        sum_eq_single (σ b) (fun a _ ha ↦ decide_eq_false ha.symm) (by simp)
-
-/-- The assignment of the variables that is `r` on the variables of the end `b` and zero on those
-of the other end. -/
-def endEmbed (b : Fin 2) (r : α → Bool) : Fin 2 × α → Bool :=
-  fun p ↦ decide (p.1 = b) && r p.2
-
-omit [DecidableEq α] in
-/-- The Hadamard encoding of the variables `x`, read at `endEmbed b r`, is that of the variables of
-the end `b`, read at `r`. -/
-private theorem hadamardCode_endEmbed (x : Fin 2 × α → Bool) (b : Fin 2) (r : α → Bool) :
-    hadamardCode x (endEmbed b r) = hadamardCode (fun a ↦ x (b, a)) r := by
-  rw [hadamardCode_apply, hadamardCode_apply, dotProduct, dotProduct, Fintype.sum_prod_type,
-    sum_eq_single b]
-  · simp [endEmbed]
-  · intro b' _ hb'
-    simp only [endEmbed, decide_eq_false hb', Bool.false_and]
-    exact sum_eq_zero fun _ _ ↦ mul_zero _
-  · simp
-
-/-- The Hadamard encoding of the one-hot encoding of the labels `σ`, read at `endEmbed b r`, is the
-long code of the label of the end `b`, read at `r`. -/
-private theorem hadamardCode_oneHot_endEmbed (σ : Fin 2 → α) (b : Fin 2) (r : α → Bool) :
-    hadamardCode (oneHot σ) (endEmbed b r) = longCode (σ b) r := by
-  rw [hadamardCode_endEmbed, longCode_eq_hadamardCode]
-  congr 1 with a : 1
-  by_cases h : σ b = a <;> simp [h, Ne.symm, Bool.zero_eq_false]
-
-/-! ### The checks, as local tests -/
-
-variable (ι) in
-/-- The **linearity test** of Blum, Luby and Rubinfeld, as a local test on a table
-`f : (ι → Bool) → Bool`: on the random string `(x, y)`, it reads `f` at `x`, `y` and `x + y`, and
-accepts when `(f x ^^ f y) = f (x + y)`. -/
-def blrTest : LocalTest (ι → Bool) ((ι → Bool) × (ι → Bool)) (Fin 3) Bool where
-  query ω := ![ω.1, ω.2, ω.1 + ω.2]
-  Accepts _ a := (a 0 ^^ a 1) = a 2
-
-/-- The linearity test accepts with the probability `blrAcceptance`. -/
-theorem acceptProb_blrTest [Fintype ι] [DecidableEq ι] (f : (ι → Bool) → Bool) :
-    (blrTest ι).acceptProb f = blrAcceptance f := by
-  simp only [LocalTest.acceptProb, Fintype.expect_prod_type, LocalTest.Passes, blrTest,
-    blrAcceptance, Matrix.cons_val]
-  exact expect_congr rfl fun x _ ↦ expect_congr rfl fun y _ ↦ by congr
-
-/-- Second vector `z` in a tensor-test randomness tuple `(y, z, r, s, t)`. -/
-abbrev tensorSecond {ι : Type*}
-    (ω : (ι → Bool) × (ι → Bool) × (ι → Bool) × (ι → Bool) × (ι × ι → Bool)) : ι → Bool :=
-  ω.2.1
-
-/-- First self-correction mask `r` in a tensor-test randomness tuple `(y, z, r, s, t)`. -/
-abbrev tensorMaskFirst {ι : Type*}
-    (ω : (ι → Bool) × (ι → Bool) × (ι → Bool) × (ι → Bool) × (ι × ι → Bool)) : ι → Bool :=
-  ω.2.2.1
-
-/-- Second self-correction mask `s` in a tensor-test randomness tuple `(y, z, r, s, t)`. -/
-abbrev tensorMaskSecond {ι : Type*}
-    (ω : (ι → Bool) × (ι → Bool) × (ι → Bool) × (ι → Bool) × (ι × ι → Bool)) : ι → Bool :=
-  ω.2.2.2.1
-
-/-- Product-table self-correction mask `t` in a tensor-test randomness tuple `(y, z, r, s, t)`. -/
-abbrev tensorMaskProd {ι : Type*}
-    (ω : (ι → Bool) × (ι → Bool) × (ι → Bool) × (ι → Bool) × (ι × ι → Bool)) : ι × ι → Bool :=
-  ω.2.2.2.2
-
-variable (ι) in
-/-- The **tensor test**, as a local test on the pair of tables `Sum.elim f g`: on the random string
-`(y, z, r, s, t)`, it compares the self-corrected read of `g` at `tensor y z` with randomness `t`
-with the product of the self-corrected reads of `f` at `y` and `z` with randomnesses `r` and `s`.
--/
-def tensorTest : LocalTest ((ι → Bool) ⊕ (ι × ι → Bool))
-    ((ι → Bool) × (ι → Bool) × (ι → Bool) × (ι → Bool) × (ι × ι → Bool)) (Fin 6) Bool where
-  query ω := ![.inr (tensorMaskProd ω), .inr (tensor ω.1 (tensorSecond ω) + tensorMaskProd ω),
-    .inl (tensorMaskFirst ω), .inl (ω.1 + tensorMaskFirst ω),
-    .inl (tensorMaskSecond ω), .inl (tensorSecond ω + tensorMaskSecond ω)]
-  Accepts _ a := (a 0 ^^ a 1) = ((a 2 ^^ a 3) && (a 4 ^^ a 5))
-
-/-- The tensor test accepts with the probability `tensorTestAcceptance`. -/
-theorem acceptProb_tensorTest [Fintype ι] [DecidableEq ι] (f : (ι → Bool) → Bool)
-    (g : (ι × ι → Bool) → Bool) :
-    (tensorTest ι).acceptProb (Sum.elim f g) = tensorTestAcceptance f g := by
-  simp only [LocalTest.acceptProb, Fintype.expect_prod_type, LocalTest.Passes, tensorTest,
-    tensorTestAcceptance, selfCorrect, Matrix.cons_val, Sum.elim_inl, Sum.elim_inr]
-  exact expect_congr rfl fun y _ ↦ expect_congr rfl fun z _ ↦ expect_congr rfl fun r _ ↦
-    expect_congr rfl fun s _ ↦ expect_congr rfl fun t _ ↦ by congr
-
-/-- The **equation test** for the linear equations `hadamardCode w (A e) = b e`, as a local test on
-a table `g : (ι → Bool) → Bool`: on the random string `(k, t)`, it compares the self-corrected read
-of `g` at the sum of the `A e` with `k e` set, with randomness `t`, with the sum of the `b e` with
-`k e` set. -/
-def equationTest [Fintype κ] (A : κ → ι → Bool) (b : κ → Bool) :
-    LocalTest (ι → Bool) ((κ → Bool) × (ι → Bool)) (Fin 2) Bool where
-  query ω := ![ω.2, (fun j ↦ hadamardCode ω.1 fun e ↦ A e j) + ω.2]
-  Accepts ω a := (a 0 ^^ a 1) = hadamardCode ω.1 b
-
-/-- The equation test accepts with the probability `equationTestAcceptance`. -/
-theorem acceptProb_equationTest [Fintype ι] [DecidableEq ι] [Fintype κ] [DecidableEq κ]
-    (g : (ι → Bool) → Bool) (A : κ → ι → Bool) (b : κ → Bool) :
-    (equationTest A b).acceptProb g = equationTestAcceptance g A b := by
-  simp only [LocalTest.acceptProb, Fintype.expect_prod_type, LocalTest.Passes, equationTest,
-    equationTestAcceptance, selfCorrect, Matrix.cons_val]
-  exact expect_congr rfl fun k _ ↦ expect_congr rfl fun t _ ↦ by congr
-
-/-- Point `r` in an input-test randomness tuple `(b, r, y)`. -/
-abbrev inputPoint {α : Type*} (ω : Fin 2 × (α → Bool) × (Fin 2 × α → Bool)) : α → Bool := ω.2.1
-
-/-- Self-correction mask `y` in an input-test randomness tuple `(b, r, y)`. -/
-abbrev inputMask {α : Type*} (ω : Fin 2 × (α → Bool) × (Fin 2 × α → Bool)) : Fin 2 × α → Bool :=
-  ω.2.2
-
-variable (α) in
-/-- The **input test**, as a local test on the tables of the two ends and the linear table,
-`Sum.elim (fun p ↦ T p.1 p.2) f`: on the random string `(b, r, y)`, it compares the bit of the table
-`T b` at `r` with the self-corrected read of `f` at `endEmbed b r` with randomness `y`. -/
-def inputTest : LocalTest ((Fin 2 × (α → Bool)) ⊕ (Fin 2 × α → Bool))
-    (Fin 2 × (α → Bool) × (Fin 2 × α → Bool)) (Fin 3) Bool where
-  query ω := ![.inl (ω.1, inputPoint ω), .inr (inputMask ω),
-    .inr (endEmbed ω.1 (inputPoint ω) + inputMask ω)]
-  Accepts _ a := a 0 = (a 1 ^^ a 2)
-
-/-- The input test accepts when the bit of the table of a random end at a random point is the
-self-corrected read of the linear table at the corresponding vector. -/
-private theorem acceptProb_inputTest (T : Fin 2 → (α → Bool) → Bool)
-    (f : (Fin 2 × α → Bool) → Bool) :
-    (inputTest α).acceptProb (Sum.elim (fun p ↦ T p.1 p.2) f) =
-      𝔼 b, 𝔼 r, 𝔼 y, if T b r = selfCorrect f (endEmbed b r) y then 1 else 0 := by
-  simp only [LocalTest.acceptProb, Fintype.expect_prod_type, LocalTest.Passes, inputTest,
-    selfCorrect, Matrix.cons_val, Sum.elim_inl, Sum.elim_inr]
-  exact expect_congr rfl fun b _ ↦ expect_congr rfl fun r _ ↦ expect_congr rfl fun y _ ↦ by congr
-
-/-- One step of a union bound: if `A` and `B` imply `F`, the indicator of the failure of `F` is at
-most the sum of the indicators of the failures of `A` and of `B`. -/
-private theorem one_sub_boole_le {A B F : Prop} [Decidable A] [Decidable B] [Decidable F]
-    (h : A → B → F) :
-    (if ¬ F then (1 : ℝ) else 0) ≤ (1 - if A then 1 else 0) + (1 - if B then 1 else 0) := by
-  split_ifs <;> first | exact absurd (h ‹A› ‹B›) ‹¬F› | norm_num
-
-/-- **Soundness of the input test**: if the linear table `f` is within relative distance `ε` of the
-Hadamard encoding of `x`, then on average over the ends `b`, the table `T b` is within relative
-distance `1 - p + 2ε` of `r ↦ hadamardCode x (endEmbed b r)`, where `p` is the acceptance
-probability of the input test. -/
-private theorem expect_hammingDist_div_le_one_sub_acceptProb_inputTest
-    {T : Fin 2 → (α → Bool) → Bool}
-    {f : (Fin 2 × α → Bool) → Bool} {x : Fin 2 × α → Bool} {ε : ℝ}
-    (hf : (hammingDist f (hadamardCode x) : ℝ) / 2 ^ Fintype.card (Fin 2 × α) ≤ ε) :
-    𝔼 b, (hammingDist (T b) (fun r ↦ hadamardCode x (endEmbed b r)) : ℝ) / 2 ^ Fintype.card α ≤
-      1 - (inputTest α).acceptProb (Sum.elim (fun p ↦ T p.1 p.2) f) + 2 * ε := by
-  -- Self-correction reads the encoding of `x` correctly with probability at least `1 - 2ε`.
-  have hsc (b : Fin 2) (r : α → Bool) : 𝔼 y, (1 - if selfCorrect f (endEmbed b r) y =
-      hadamardCode x (endEmbed b r) then (1 : ℝ) else 0) ≤ 2 * ε := by
-    have := one_sub_two_mul_le_expect_selfCorrect_hadamardCode hf (endEmbed b r)
-    rw [expect_sub_distrib, Fintype.expect_const]; linarith
-  calc 𝔼 b, (hammingDist (T b) (fun r ↦ hadamardCode x (endEmbed b r)) : ℝ) / 2 ^ Fintype.card α
-      = 𝔼 b, 𝔼 r, 𝔼 _y : Fin 2 × α → Bool,
-          if T b r ≠ hadamardCode x (endEmbed b r) then (1 : ℝ) else 0 := by
-        congr 1 with b
-        simp only [Fintype.expect_const]
-        rw [← hammingDist_div_eq_expect, Fintype.card_fun, Fintype.card_bool, Nat.cast_pow,
-          Nat.cast_ofNat]
-    _ ≤ 𝔼 b, 𝔼 r, 𝔼 y, ((1 - if T b r = selfCorrect f (endEmbed b r) y then (1 : ℝ) else 0) +
-          (1 - if selfCorrect f (endEmbed b r) y = hadamardCode x (endEmbed b r) then (1 : ℝ)
-            else 0)) := by
-        gcongr with b _ r _ y _
-        exact one_sub_boole_le fun h h' ↦ h.trans h'
-    _ ≤ 1 - (inputTest α).acceptProb (Sum.elim (fun p ↦ T p.1 p.2) f) + 2 * ε := by
-        rw [acceptProb_inputTest]
-        simp only [expect_add_distrib, expect_sub_distrib, Fintype.expect_const]
-        have := expect_le_expect (s := Finset.univ) fun b _ ↦
-          expect_le_expect (s := Finset.univ) fun r _ ↦ hsc b r
-        simp only [expect_sub_distrib, Fintype.expect_const] at this
-        linarith
-
-/-! ### The tester -/
-
-variable (α) in
-/-- The assignments of the variables `Fin 2 × α`: the positions of the linear table, and the random
-strings of its checks. -/
-abbrev LinPos : Type _ :=
-  Fin 2 × α → Bool
-
-variable (α) in
-/-- The assignments of the pairs of variables: the positions of the quadratic table, and the random
-strings of its checks. -/
-abbrev QuadPos : Type _ :=
-  (Fin 2 × α) × (Fin 2 × α) → Bool
-
-variable (α) in
-/-- The random strings of the equation test: the sets of quadratic equations of a constraint. -/
-abbrev EqnRand : Type _ :=
-  (Fin 2 × α) × (Fin 2 × α) ⊕ Fin 2 → Bool
-
-/- The instances on the recurring factors of the positions and random strings are declared on them,
-rather than found on the function types they unfold to, so that the instances on the products of
-the tester stay below the size limit of instance synthesis. -/
-
-instance LinPos.instFintype : Fintype (LinPos α) :=
-  inferInstanceAs (Fintype (Fin 2 × α → Bool))
-
-instance QuadPos.instFintype : Fintype (QuadPos α) :=
-  inferInstanceAs (Fintype ((Fin 2 × α) × (Fin 2 × α) → Bool))
-
-instance EqnRand.instFintype : Fintype (EqnRand α) :=
-  inferInstanceAs (Fintype ((Fin 2 × α) × (Fin 2 × α) ⊕ Fin 2 → Bool))
-
-variable (α) in
-/-- The positions of the proofs read by the tester for constraints on labels in `α`: the bit
-`inl (b, r)` of the table of the end `b` at `r`, the bit `inr (inl y)` of the linear table at `y`,
-and the bit `inr (inr z)` of the quadratic table at `z`. -/
-abbrev Pos : Type _ :=
-  (Fin 2 × (α → Bool)) ⊕ (LinPos α ⊕ QuadPos α)
-
-variable (α) in
-/-- The random strings of the tester: those of its five checks. -/
-abbrev Rand : Type _ :=
-  (LinPos α × LinPos α) × (QuadPos α × QuadPos α) ×
-    (LinPos α × LinPos α × LinPos α × LinPos α × QuadPos α) × (EqnRand α × QuadPos α) ×
-    (Fin 2 × (α → Bool) × LinPos α)
-
-/-- The random strings of the tester are finitely many. -/
-instance : Fintype (Rand α) :=
-  inferInstanceAs (Fintype (_ × _ × _ × _ × _))
-
-/-- The queries of the tester: three for each linearity test, six for the tensor test, two for the
-equation test and three for the input test. -/
-abbrev Query : Type :=
-  Fin 3 ⊕ Fin 3 ⊕ Fin 6 ⊕ Fin 2 ⊕ Fin 3
-
-/-- The tester makes `17` queries. -/
-theorem card_query : Fintype.card Query = 17 :=
-  rfl
-
-/-- The tester uses `20 k² + 15 k + 3` random bits, for `k` labels. -/
-theorem card_rand :
-    Fintype.card (Rand α) = 2 ^ (20 * Fintype.card α ^ 2 + 15 * Fintype.card α + 3) := by
-  simp only [Fintype.card_prod, Fintype.card_sum, Fintype.card_fun, Fintype.card_bool,
-    Fintype.card_fin]
-  ring
-
-/-- The table of the end `b` carried by the proof `π`. -/
-def inputTable (π : Pos α → Bool) (b : Fin 2) : (α → Bool) → Bool :=
-  fun r ↦ π (.inl (b, r))
-
-/-- The linear table carried by the proof `π`. -/
-private def linTable (π : Pos α → Bool) : (Fin 2 × α → Bool) → Bool :=
-  fun y ↦ π (.inr (.inl y))
-
-/-- The quadratic table carried by the proof `π`. -/
-private def quadTable (π : Pos α → Bool) : ((Fin 2 × α) × (Fin 2 × α) → Bool) → Bool :=
-  fun z ↦ π (.inr (.inr z))
-
-/-- The five checks of the Hadamard assignment tester on independent random strings, parameterized
-by the coefficient table of the quadratic equations so that mathematical and executable constraints
-share the same definition. -/
-def test (coeff : ((Fin 2 × α) × (Fin 2 × α) ⊕ Fin 2) →
-    (Fin 2 × α) × (Fin 2 × α) → Bool) :
-    LocalTest (Pos α) (Rand α) Query Bool :=
-  ((blrTest _).map fun y ↦ .inr (.inl y)).and <|
-    ((blrTest _).map fun z ↦ .inr (.inr z)).and <|
-    ((tensorTest _).map (Sum.elim (fun y ↦ .inr (.inl y)) fun z ↦ .inr (.inr z))).and <|
-    ((equationTest coeff equationRhs).map fun z ↦ .inr (.inr z)).and <|
-    (inputTest α).map (Sum.elim .inl fun y ↦ .inr (.inl y))
-
-end HadamardTester
-
-open HadamardTester
-
-variable [Fintype α] [DecidableEq α]
-
-/-- The **Hadamard assignment tester** of the constraint `C` on labels in `α`
-[Arora and Barak, Chapter 22][AroraBarak09]: on independent random strings, the linearity test on
-the linear and on the quadratic table, the tensor test, the equation test for the quadratic
-equations of `C`, and the input test; it accepts when all five accept. -/
-noncomputable def hadamardTester (C : α → α → Prop) :
-    LocalTest (Pos α) (Rand α) Query Bool :=
-  HadamardTester.test (equationCoeff C)
-
-namespace HadamardTester
-
-variable {C : α → α → Prop}
-
-/-- The tester accepts at most as often as each of its five checks. -/
-private theorem acceptProb_le (π : Pos α → Bool) :
-    (hadamardTester C).acceptProb π ≤ blrAcceptance (linTable π) ∧
-      (hadamardTester C).acceptProb π ≤ blrAcceptance (quadTable π) ∧
-      (hadamardTester C).acceptProb π ≤ tensorTestAcceptance (linTable π) (quadTable π) ∧
-      (hadamardTester C).acceptProb π ≤
-        equationTestAcceptance (quadTable π) (equationCoeff C) equationRhs ∧
-      (hadamardTester C).acceptProb π ≤
-        (inputTest α).acceptProb (Sum.elim (fun p ↦ inputTable π p.1 p.2) (linTable π)) := by
-  open LocalTest in
-  have h1 : (hadamardTester C).acceptProb π ≤ _ := acceptProb_and_le_right _ π
-  have h2 : (hadamardTester C).acceptProb π ≤ _ := h1.trans (acceptProb_and_le_right _ π)
-  have h3 : (hadamardTester C).acceptProb π ≤ _ := h2.trans (acceptProb_and_le_right _ π)
-  refine ⟨(acceptProb_and_le_left _ π).trans_eq ((acceptProb_map ..).trans (acceptProb_blrTest _)),
-    (h1.trans (acceptProb_and_le_left _ π)).trans_eq
-      ((acceptProb_map ..).trans (acceptProb_blrTest _)),
-    (h2.trans (acceptProb_and_le_left _ π)).trans_eq ?_,
-    (h3.trans (acceptProb_and_le_left _ π)).trans_eq
-      ((acceptProb_map ..).trans (acceptProb_equationTest _ _ _)),
-    (h3.trans (acceptProb_and_le_right _ π)).trans_eq ?_⟩
-  · rw [acceptProb_map, Sum.comp_elim]
-    exact acceptProb_tensorTest _ _
-  · rw [acceptProb_map, Sum.comp_elim]; rfl
-
-/-! ### Soundness -/
-
-/-- The **distance of the tables** of the proof `π` from the long codes of the labels `σ`: the
-relative Hamming distance of the table of an end from the long code of its label, averaged over the
-two ends. It is the proportion of the positions of the two tables at which `π` differs from the
-long codes. -/
-noncomputable def inputDist (π : Pos α → Bool) (σ : Fin 2 → α) : ℝ :=
-  𝔼 b, (hammingDist (inputTable π b) (longCode (σ b)) : ℝ) / 2 ^ Fintype.card α
-
-/-- The distance of the tables of `π` from the long codes of `σ` is the average of the distances
-of the two tables. -/
-private theorem inputDist_eq (π : Pos α → Bool) (σ : Fin 2 → α) :
-    inputDist π σ =
-      ((hammingDist (inputTable π 0) (longCode (σ 0)) : ℝ) / 2 ^ Fintype.card α +
-        (hammingDist (inputTable π 1) (longCode (σ 1)) : ℝ) / 2 ^ Fintype.card α) / 2 := by
-  rw [inputDist, Fintype.expect_eq_sum_div_card, Fin.sum_univ_two, Fintype.card_fin,
-    Nat.cast_ofNat]
-
-theorem inputDist_nonneg (π : Pos α → Bool) (σ : Fin 2 → α) : 0 ≤ inputDist π σ := by
-  rw [inputDist_eq]; positivity
-
-theorem inputDist_le_one (π : Pos α → Bool) (σ : Fin 2 → α) : inputDist π σ ≤ 1 := by
-  have h (b : Fin 2) :
-      (hammingDist (inputTable π b) (longCode (σ b)) : ℝ) / 2 ^ Fintype.card α ≤ 1 := by
-    rw [div_le_one (by positivity)]
-    simpa [Fintype.card_fun, Fintype.card_bool] using
-      (Nat.cast_le (α := ℝ)).2 (hammingDist_le_card_fintype (x := inputTable π b) (y := _))
-  rw [inputDist_eq]; linarith [h 0, h 1]
-
-/-- The distance of each table from the long code of its label is at most twice the distance of
-the tables. -/
-theorem hammingDist_inputTable_div_le (π : Pos α → Bool) (σ : Fin 2 → α) (b : Fin 2) :
-    (hammingDist (inputTable π b) (longCode (σ b)) : ℝ) / 2 ^ Fintype.card α ≤
-      2 * inputDist π σ := by
-  have h (b : Fin 2) :
-      0 ≤ (hammingDist (inputTable π b) (longCode (σ b)) : ℝ) / 2 ^ Fintype.card α := by
-    positivity
-  rw [inputDist_eq]
-  fin_cases b <;> simp only [Fin.zero_eta, Fin.mk_one] <;> linarith [h 0, h 1]
-
-/-- **Soundness of the Hadamard assignment tester**: if the tester of `C` accepts the proof `π`
-with probability at least `1 - ρ` for some `ρ < 1/28`, then the tables of `π` are within distance
-`3ρ` of the long codes of labels satisfying `C`. The linearity tests decode the linear and the
-quadratic table to `x` and `w`; the tensor test forces `w` to be the tensor square of `x`, and the
-equation test makes `x` a solution of the equations of `C`, hence the one-hot encoding of
-satisfying labels; the input test then compares the tables with their long codes. -/
-theorem exists_inputDist_le_of_le_acceptProb {π : Pos α → Bool} {ρ : ℝ} (hρ : ρ < 1 / 28)
-    (h : 1 - ρ ≤ (hadamardTester C).acceptProb π) :
-    ∃ σ : Fin 2 → α, C (σ 0) (σ 1) ∧ inputDist π σ ≤ 3 * ρ := by
-  obtain ⟨h₁, h₂, h₃, h₄, h₅⟩ := acceptProb_le (C := C) π
-  obtain ⟨x, hx⟩ := exists_hammingDist_hadamardCode_le_of_le_blrAcceptance (h.trans h₁)
-  obtain ⟨w, hw⟩ := exists_hammingDist_hadamardCode_le_of_le_blrAcceptance (h.trans h₂)
-  obtain rfl := eq_tensor_of_lt_tensorTestAcceptance hx hw (by linarith)
-  obtain ⟨σ, hσ, rfl⟩ := forall_hadamardCode_tensor_equationCoeff_iff.1
-    (hadamardCode_eq_of_lt_equationTestAcceptance (A := equationCoeff C) (b := equationRhs) hw
-      (by linarith))
-  refine ⟨σ, hσ, ?_⟩
-  have hin := expect_hammingDist_div_le_one_sub_acceptProb_inputTest (T := inputTable π) hx
-  simp only [hadamardCode_oneHot_endEmbed] at hin
-  rw [inputDist]; linarith
-
-/-- **Soundness of the Hadamard assignment tester** [Dinur, Definition 3.1][Dinur2005]: if the
-constraint `C` is satisfiable, the tester of `C` rejects every proof with probability at least
-`1/28` times the distance of its tables from the long codes of some labels satisfying `C`. -/
-theorem exists_inputDist_div_le_one_sub_acceptProb (hC : ∃ a b, C a b) (π : Pos α → Bool) :
-    ∃ σ : Fin 2 → α, C (σ 0) (σ 1) ∧
-      inputDist π σ / 28 ≤ 1 - (hadamardTester C).acceptProb π := by
-  by_cases hρ : 1 - (hadamardTester C).acceptProb π < 1 / 28
-  · obtain ⟨σ, hσ, hd⟩ := exists_inputDist_le_of_le_acceptProb hρ (by linarith)
-    exact ⟨σ, hσ, by linarith [(hadamardTester C).acceptProb_le_one π]⟩
-  · obtain ⟨a, b, hab⟩ := hC
-    exact ⟨![a, b], hab, by linarith [inputDist_le_one π ![a, b]]⟩
-
-/-- **Soundness of the Hadamard assignment tester** for an unsatisfiable constraint: the tester
-rejects every proof with probability at least `1/28`. -/
-theorem one_div_le_one_sub_acceptProb_of_forall_not (hC : ∀ a b, ¬ C a b)
-    (π : Pos α → Bool) : 1 / 28 ≤ 1 - (hadamardTester C).acceptProb π := by
-  by_contra! hρ
-  obtain ⟨σ, hσ, -⟩ := exists_inputDist_le_of_le_acceptProb hρ (by linarith)
-  exact hC _ _ hσ
-
-/-! ### Completeness -/
-
-/-- The **honest proof** for the labels `σ`: the long codes of the labels as the tables of the
-ends, and the Hadamard encodings of their one-hot encoding and of its tensor square as the linear
-and the quadratic table. -/
-def honestProof (σ : Fin 2 → α) : Pos α → Bool :=
-  Sum.elim (fun p ↦ longCode (σ p.1) p.2)
-    (Sum.elim (hadamardCode (oneHot σ)) (hadamardCode (tensor (oneHot σ) (oneHot σ))))
-
-/-- The tables of the honest proof for `σ` are the long codes of `σ`. -/
-@[simp]
-theorem inputDist_honestProof (σ : Fin 2 → α) : inputDist (honestProof σ) σ = 0 := by
-  have h (b : Fin 2) : inputTable (honestProof σ) b = longCode (σ b) := rfl
-  simp [inputDist, h]
-
-/-- **Completeness of the Hadamard assignment tester**: the honest proof for labels satisfying the
-constraint passes on every random string. -/
-theorem passes_honestProof {σ : Fin 2 → α} (hσ : C (σ 0) (σ 1))
-    (ω : Rand α) : (hadamardTester C).Passes (honestProof σ) ω := by
-  obtain ⟨ω₁, ω₂, ω₃, ω₄, b, r, y⟩ := ω
-  simp only [hadamardTester, test, LocalTest.passes_and, LocalTest.passes_map, Sum.comp_elim]
-  refine ⟨((blrTest _).acceptProb_eq_one_iff (π := hadamardCode _)).1
-      (by rw [acceptProb_blrTest, blrAcceptance_hadamardCode]) ω₁,
-    ((blrTest _).acceptProb_eq_one_iff (π := hadamardCode _)).1
-      (by rw [acceptProb_blrTest, blrAcceptance_hadamardCode]) ω₂,
-    ((tensorTest (Fin 2 × α)).acceptProb_eq_one_iff
-      (π := Sum.elim (hadamardCode (oneHot σ)) (hadamardCode (tensor (oneHot σ) (oneHot σ))))).1
-      (by rw [acceptProb_tensorTest, tensorTestAcceptance_hadamardCode]) ω₃,
-    ((equationTest (equationCoeff C) equationRhs).acceptProb_eq_one_iff
-      (π := hadamardCode (tensor (oneHot σ) (oneHot σ)))).1
-      (by rw [acceptProb_equationTest, equationTestAcceptance_hadamardCode
-        (forall_hadamardCode_tensor_equationCoeff_iff.2 ⟨σ, hσ, rfl⟩)]) ω₄, ?_⟩
-  change longCode (σ b) r = selfCorrect (hadamardCode (oneHot σ)) (endEmbed b r) y
-  rw [selfCorrect_hadamardCode, hadamardCode_oneHot_endEmbed]
-
-/-- **Completeness of the Hadamard assignment tester**: the honest proof for labels satisfying the
-constraint is accepted with probability one. -/
-theorem acceptProb_honestProof {σ : Fin 2 → α} (hσ : C (σ 0) (σ 1)) :
-    (hadamardTester C).acceptProb (honestProof σ) = 1 :=
-  ((hadamardTester C).acceptProb_eq_one_iff).2 (passes_honestProof hσ)
-
-/-! ### The tester as a constraint graph -/
-
-/-- **Completeness of the tester as a constraint graph** [Dinur, Definition 3.1][Dinur2005]: for
-labels satisfying the constraint, the labelling of the constraint graph of the tester by the honest
-proof, whose positions of the tables carry the long codes of the labels, satisfies every edge. -/
-theorem satisfies_toConstraintGraph_honestProof {σ : Fin 2 → α}
-    (hσ : C (σ 0) (σ 1)) (γ : Bool) (x : Rand α × Query) :
-    (hadamardTester C).toConstraintGraph.Satisfies
-      ((hadamardTester C).labellingOf (honestProof σ) γ) x :=
-  LocalTest.satisfies_labellingOf (passes_honestProof hσ x.1)
-
-/-- **Soundness of the tester as a constraint graph** [Dinur, Definition 3.1][Dinur2005]: if the
-constraint `C` is satisfiable, every labelling of the constraint graph of the tester violates a
-proportion of the edges at least `1/476` times the distance of the tables it carries from the long
-codes of some labels satisfying `C`. -/
-theorem exists_inputDist_div_le_unsatFrac (hC : ∃ a b, C a b)
-    (A : Pos α ⊕ Rand α → Bool × (Query → Bool)) :
-    ∃ σ : Fin 2 → α, C (σ 0) (σ 1) ∧
-      inputDist (LocalTest.proofOf A) σ / 476 ≤
-        (hadamardTester C).toConstraintGraph.unsatFrac A := by
-  obtain ⟨σ, hσ, h⟩ := exists_inputDist_div_le_one_sub_acceptProb hC (LocalTest.proofOf A)
-  have h' := LocalTest.one_sub_acceptProb_le_card_mul_unsatFrac (T := hadamardTester C) A
-  rw [card_query, Nat.cast_ofNat] at h'
-  exact ⟨σ, hσ, by linarith⟩
-
-/-- **Soundness of the tester as a constraint graph** for an unsatisfiable constraint: every
-labelling violates a proportion at least `1/476` of the edges. -/
-theorem one_div_le_unsatFrac_of_forall_not (hC : ∀ a b, ¬ C a b)
-    (A : Pos α ⊕ Rand α → Bool × (Query → Bool)) :
-    1 / 476 ≤ (hadamardTester C).toConstraintGraph.unsatFrac A := by
-  have h := one_div_le_one_sub_acceptProb_of_forall_not hC (LocalTest.proofOf A)
-  have h' := LocalTest.one_sub_acceptProb_le_card_mul_unsatFrac (T := hadamardTester C) A
-  rw [card_query, Nat.cast_ofNat] at h'
+/-- Relative Hamming difference count `#{i : Fin k | u i ≠ v i}` over an arbitrary alphabet. -/
+noncomputable def tupleDiffCount {Γ : Type*} {k : ℕ} (u v : Fin k → Γ) : ℕ := by
+  classical
+  exact (Finset.univ.filter fun i : Fin k ↦ u i ≠ v i).card
+
+theorem tupleDiffCount_triangle {Γ : Type*} {k : ℕ} (u v w : Fin k → Γ) :
+    tupleDiffCount u w ≤ tupleDiffCount u v + tupleDiffCount v w := by
+  classical
+  dsimp only [tupleDiffCount]
+  refine (Finset.card_le_card (t :=
+      (Finset.univ.filter fun i ↦ u i ≠ v i) ∪
+        (Finset.univ.filter fun i ↦ v i ≠ w i)) fun i hi ↦ ?_).trans
+    (Finset.card_union_le _ _)
+  simp only [Finset.mem_filter, Finset.mem_univ, true_and, Finset.mem_union] at hi ⊢
+  by_contra h; push Not at h; exact hi (h.1.trans h.2)
+
+/-- Concatenation `(u, v, aux)` of two `k`-tuples and an `m`-tuple into `Fin (2 * k + m) → Γ`. -/
+@[expose]
+def concatThree {Γ : Type*} {k m : ℕ} (u v : Fin k → Γ) (aux : Fin m → Γ)
+    (idx : Fin (2 * k + m)) : Γ :=
+  if h1 : idx.1 < k then u ⟨idx.1, h1⟩
+  else if h2 : idx.1 < 2 * k then v ⟨idx.1 - k, by omega⟩
+  else aux ⟨idx.1 - 2 * k, by omega⟩
+
+/-- Number of indices `r : Fin R` satisfying `P r`. -/
+noncomputable def countPassing {R : ℕ} (P : Fin R → Prop) : ℕ := by
+  classical
+  exact (Finset.univ.filter P).card
+
+/-- An `ℓ`-query assignment tester over arbitrary input alphabet `A` and output alphabet `Γ` for an
+indexed family of binary relations `evalC : CIdx → A → A → Prop`, outputting local `ℓ`-ary
+constraints in `D`. -/
+structure AssignmentTester (A Γ CIdx : Type*) {ℓ : ℕ} (evalC : CIdx → A → A → Prop)
+    (D : Set ((Fin ℓ → Γ) → Prop)) where
+  /-- Codeword length `k ≥ 1`. -/
+  k : ℕ
+  /-- Positivity of codeword length. -/
+  hk : 1 ≤ k
+  /-- Auxiliary block length per tested constraint. -/
+  m : ℕ
+  /-- Number of local checks (verifier coin outcomes) per tested constraint. -/
+  R : ℕ
+  /-- Positivity of local check count. -/
+  hR : 1 ≤ R
+  /-- Positivity of query arity. -/
+  hℓ : 1 ≤ ℓ
+  /-- Soundness rejection threshold `ζ > 0`. -/
+  ζ : ℝ
+  /-- Positivity of `ζ`. -/
+  hζ : 0 < ζ
+  /-- Relative minimum Hamming distance `δ > 0` of `encode`. -/
+  δ : ℝ
+  /-- Positivity of `δ`. -/
+  hδ : 0 < δ
+  /-- Error-correcting encoding `A → (Fin k → Γ)`. -/
+  encode : A → (Fin k → Γ)
+  /-- Minimum distance lower bound on distinct inputs. -/
+  dist_encode : ∀ x y : A, x ≠ y → δ * (k : ℝ) ≤ (tupleDiffCount (encode x) (encode y) : ℝ)
+  /-- Non-adaptive query map into the concatenated `(u, v, aux)` view. -/
+  query : CIdx → Fin R → Fin ℓ → Fin (2 * k + m)
+  /-- Local `ℓ`-ary accepting set for constraint index `c` and coin `r`. -/
+  testSet : CIdx → Fin R → Set (Fin ℓ → Γ)
+  /-- Every local check belongs to `D`. -/
+  testSet_mem : ∀ (c : CIdx) (r : Fin R), (fun v ↦ v ∈ testSet c r) ∈ D
+  /-- Perfect completeness: valid pairs `(x, y)` extend to an auxiliary tuple passing all checks. -/
+  complete : ∀ (c : CIdx) (x y : A), evalC c x y →
+    ∃ aux : Fin m → Γ, ∀ r : Fin R,
+      (fun j ↦ concatThree (encode x) (encode y) aux (query c r j)) ∈ testSet c r
+  /-- Soundness: passing at least `(1 - ζ) R` checks implies `< δ / 2`-closeness to an encoded
+  satisfying pair `(x, y)`. -/
+  sound : ∀ (c : CIdx) (α β : Fin k → Γ) (γ : Fin m → Γ),
+    (1 - ζ) * (R : ℝ) ≤
+      (countPassing (fun r : Fin R ↦
+        (fun j ↦ concatThree α β γ (query c r j)) ∈ testSet c r) : ℝ) →
+    ∃ x y : A, evalC c x y ∧
+      (tupleDiffCount α (encode x) : ℝ) < (δ / 2) * (k : ℝ) ∧
+      (tupleDiffCount β (encode y) : ℝ) < (δ / 2) * (k : ℝ)
+
+/-- Subset-decoding property: any codeword strictly within relative distance `δ / 2` of a
+`W`-valued string comes from an element of `S`. -/
+@[expose]
+def AssignmentTester.SubsetDecoding {A Γ CIdx : Type*} {ℓ : ℕ} {evalC : CIdx → A → A → Prop}
+    {D : Set ((Fin ℓ → Γ) → Prop)} (T : AssignmentTester A Γ CIdx evalC D)
+    (S : Set A) (W : Set Γ) : Prop :=
+  ∀ (b : Fin T.k → Γ) (x : A), (∀ i : Fin T.k, b i ∈ W) →
+    (tupleDiffCount b (T.encode x) : ℝ) < (T.δ / 2) * (T.k : ℝ) → x ∈ S
+
+/-- Uniqueness of `< δ / 2`-decoding for any `AssignmentTester`. -/
+theorem AssignmentTester.decode_unique {A Γ CIdx : Type*} {ℓ : ℕ} {evalC : CIdx → A → A → Prop}
+    {D : Set ((Fin ℓ → Γ) → Prop)} (T : AssignmentTester A Γ CIdx evalC D)
+    {b : Fin T.k → Γ} {x y : A}
+    (hx : (tupleDiffCount b (T.encode x) : ℝ) < (T.δ / 2) * (T.k : ℝ))
+    (hy : (tupleDiffCount b (T.encode y) : ℝ) < (T.δ / 2) * (T.k : ℝ)) :
+    x = y := by
+  by_contra hne
+  have hdist := T.dist_encode x y hne
+  have hsym : tupleDiffCount (T.encode x) b = tupleDiffCount b (T.encode x) := by
+    classical
+    dsimp only [tupleDiffCount]; simp only [ne_comm]
+  have htri : (tupleDiffCount (T.encode x) (T.encode y) : ℝ) ≤
+      (tupleDiffCount b (T.encode x) : ℝ) + (tupleDiffCount b (T.encode y) : ℝ) := by
+    rw [← hsym]; exact_mod_cast tupleDiffCount_triangle (T.encode x) b (T.encode y)
   linarith
 
-end HadamardTester
+/-- Vertex type of the composed constraint graph: codeword symbols `V × Fin k`, per-edge auxiliary
+symbols `E × Fin m`, and per-check local views `E × Fin R`. -/
+abbrev ComposedVertex (V E : Type*) (k m R : ℕ) : Type _ :=
+  (V × Fin k) ⊕ (E × Fin m) ⊕ (E × Fin R)
 
-end Cslib.PCP
+/-- Edge type of the composed constraint graph: for each `(e, r)`, one self-loop `none` enforcing
+the local test and `ℓ` consistency edges `some j`. -/
+abbrev ComposedEdge (E : Type*) (R ℓ : ℕ) : Type _ :=
+  E × Fin R × Option (Fin ℓ)
+
+/-- Target vertex in `ComposedVertex V E k m R` corresponding to window index `idx`. -/
+@[expose]
+def composedTarget {V E : Type*} {k m R : ℕ} (u v : V) (e : E)
+    (idx : Fin (2 * k + m)) : ComposedVertex V E k m R :=
+  if h1 : idx.1 < k then .inl (u, ⟨idx.1, h1⟩)
+  else if h2 : idx.1 < 2 * k then .inl (v, ⟨idx.1 - k, by omega⟩)
+  else .inr (.inl (e, ⟨idx.1 - 2 * k, by omega⟩))
+
+/-- Composed constraint graph over tuple alphabet `Fin ℓ → Γ`. -/
+@[expose]
+def composeGraph {V E A Γ CIdx : Type*} {ℓ : ℕ} {evalC : CIdx → A → A → Prop}
+    {D : Set ((Fin ℓ → Γ) → Prop)}
+    (G : ConstraintGraph V E A) (cEdge : E → CIdx) (T : AssignmentTester A Γ CIdx evalC D) :
+    ConstraintGraph (ComposedVertex V E T.k T.m T.R) (ComposedEdge E T.R ℓ) (Fin ℓ → Γ) where
+  src er := .inr (.inr (er.1, er.2.1))
+  dst er := match er.2.2 with
+    | none => .inr (.inr (er.1, er.2.1))
+    | some j => composedTarget (G.src er.1) (G.dst er.1) er.1 (T.query (cEdge er.1) er.2.1 j)
+  rel er x y := match er.2.2 with
+    | none => x ∈ T.testSet (cEdge er.1) er.2.1
+    | some j => x j = y ⟨0, T.hℓ⟩
+
+theorem card_composedEdge (E : Type*) [Fintype E] (R ℓ : ℕ) :
+    Fintype.card (ComposedEdge E R ℓ) = (ℓ + 1) * R * Fintype.card E := by
+  simp only [ComposedEdge, Fintype.card_prod, Fintype.card_option, Fintype.card_fin]; ring
+
+/-- Minimum unsatisfied fraction of `G` over assignments restricted to a subset `S ⊆ α`. -/
+noncomputable def unsatValRestricted {V E α : Type*} [Fintype E]
+    (G : ConstraintGraph V E α) (S : Set α) : ℝ :=
+  sInf {G.unsatFrac σ | (σ : V → α) (_ : ∀ v : V, σ v ∈ S)}
+
+theorem exists_unsatFrac_eq_unsatValRestricted {V E α : Type*} [Fintype E]
+    (G : ConstraintGraph V E α) {S : Set α} (hS : S.Nonempty) :
+    ∃ σ : V → α, (∀ v : V, σ v ∈ S) ∧ G.unsatFrac σ = unsatValRestricted G S := by
+  obtain ⟨s₀, hs₀⟩ := hS
+  have hne : {G.unsatFrac σ | (σ : V → α) (_ : ∀ v, σ v ∈ S)}.Nonempty :=
+    ⟨G.unsatFrac (fun _ ↦ s₀), fun _ ↦ s₀, fun _ ↦ hs₀, rfl⟩
+  have hfin : {G.unsatFrac σ | (σ : V → α) (_ : ∀ v, σ v ∈ S)}.Finite :=
+    G.finite_range_unsatFrac.subset (by rintro _ ⟨σ, -, rfl⟩; exact ⟨σ, rfl⟩)
+  obtain ⟨σ, hσ, heq⟩ := hne.csInf_mem hfin
+  exact ⟨σ, hσ, heq⟩
+
+theorem unsatValRestricted_le {V E α : Type*} [Fintype E]
+    (G : ConstraintGraph V E α) {S : Set α} {σ : V → α} (hσ : ∀ v : V, σ v ∈ S) :
+    unsatValRestricted G S ≤ G.unsatFrac σ := by
+  refine csInf_le ⟨0, ?_⟩ ⟨σ, hσ, rfl⟩
+  rintro _ ⟨τ, -, rfl⟩; exact G.unsatFrac_nonneg τ
+
+/-- Subset-decoding soundness of assignment-tester composition: if `T` is subset-decoding on
+`(S, W)`, then `(ζ / (ℓ + 1)) · UNSAT_S(G) ≤ UNSAT_{W^ℓ}(composeGraph G cEdge T)`. -/
+theorem le_unsatValRestricted_composeGraph {V E A Γ CIdx : Type*} [Fintype E] {ℓ : ℕ}
+    {evalC : CIdx → A → A → Prop} {D : Set ((Fin ℓ → Γ) → Prop)}
+    (G : ConstraintGraph V E A) (cEdge : E → CIdx)
+    (hc : ∀ (e : E) (x y : A), G.rel e x y ↔ evalC (cEdge e) x y)
+    (T : AssignmentTester A Γ CIdx evalC D) {S : Set A} {W : Set Γ}
+    (hS : S.Nonempty) (hW : W.Nonempty) (hdec : T.SubsetDecoding S W) :
+    (T.ζ / ((ℓ : ℝ) + 1)) * unsatValRestricted G S ≤
+      unsatValRestricted (composeGraph G cEdge T) {v : Fin ℓ → Γ | ∀ j, v j ∈ W} := by
+  classical
+  let h0 : Fin ℓ := ⟨0, T.hℓ⟩
+  obtain ⟨s₀, hs₀⟩ := hS
+  obtain ⟨w₀, hw₀⟩ := hW
+  let G' := composeGraph G cEdge T
+  obtain ⟨B, hBW, hBmin⟩ := exists_unsatFrac_eq_unsatValRestricted G'
+    (S := {v : Fin ℓ → Γ | ∀ j, v j ∈ W}) ⟨fun _ ↦ w₀, fun _ ↦ hw₀⟩
+  rw [← hBmin]
+  by_cases hE0 : Fintype.card E = 0
+  · have : IsEmpty E := Fintype.card_eq_zero_iff.mp hE0
+    have hG0 : unsatValRestricted G S ≤ 0 := by
+      simpa [ConstraintGraph.unsatFrac] using
+        unsatValRestricted_le G (σ := fun _ ↦ s₀) (fun _ ↦ hs₀)
+    have hpos : 0 ≤ T.ζ / ((ℓ : ℝ) + 1) := by have := T.hζ; positivity
+    exact (mul_nonpos_of_nonneg_of_nonpos hpos hG0).trans (G'.unsatFrac_nonneg B)
+  · let word (u : V) (i : Fin T.k) : Γ := B (.inl (u, i)) h0
+    let aux (e : E) (j : Fin T.m) : Γ := B (.inr (.inl (e, j))) h0
+    have hwordW (u : V) (i : Fin T.k) : word u i ∈ W := hBW (.inl (u, i)) h0
+    let close (u : V) : Prop := ∃ x : A, (tupleDiffCount (word u) (T.encode x) : ℝ) <
+      (T.δ / 2) * (T.k : ℝ)
+    let σ (u : V) : A := if h : close u then h.choose else s₀
+    have hσS (u : V) : σ u ∈ S := by
+      dsimp only [σ]
+      by_cases h : close u
+      · rw [dite_eq_left h]; exact hdec (word u) h.choose (hwordW u) h.choose_spec
+      · rw [dite_eq_right h]; exact hs₀
+    have hedge (e : E) (hunsat : e ∈ G.unsatEdges σ) :
+        T.ζ * (T.R : ℝ) ≤
+          ((Finset.univ.filter fun ro : Fin T.R × Option (Fin ℓ) ↦
+            (e, ro.1, ro.2) ∈ G'.unsatEdges B).card : ℝ) := by
+      by_contra hlt; push Not at hlt
+      let good (r : Fin T.R) : Prop := ∀ o : Option (Fin ℓ), (e, r, o) ∉ G'.unsatEdges B
+      have hbad_le : (Finset.univ.filter fun r : Fin T.R ↦ ¬ good r).card ≤
+          (Finset.univ.filter fun ro : Fin T.R × Option (Fin ℓ) ↦
+            (e, ro.1, ro.2) ∈ G'.unsatEdges B).card := by
+        have hpick : ∀ r ∈ Finset.univ.filter (fun r : Fin T.R ↦ ¬ good r),
+            ∃ o : Option (Fin ℓ), (e, r, o) ∈ G'.unsatEdges B := fun r hr ↦ by
+          have := (Finset.mem_filter.mp hr).2; dsimp [good] at this; push Not at this; exact this
+        refine Finset.card_le_card_of_injOn
+          (fun r ↦ if hr : r ∈ Finset.univ.filter (fun r ↦ ¬ good r)
+            then (r, (hpick r hr).choose) else (r, none))
+          (fun r hr ↦ by
+            have hr' : r ∈ Finset.univ.filter fun r ↦ ¬ good r := hr
+            dsimp only; rw [Finset.mem_coe, dite_eq_left hr']
+            exact Finset.mem_filter.mpr ⟨Finset.mem_univ _, (hpick r hr').choose_spec⟩)
+          (fun r₁ h₁ r₂ h₂ heq ↦ by
+            have h₁' : r₁ ∈ Finset.univ.filter fun r ↦ ¬ good r := h₁
+            have h₂' : r₂ ∈ Finset.univ.filter fun r ↦ ¬ good r := h₂
+            dsimp only at heq; rw [dite_eq_left h₁', dite_eq_left h₂'] at heq
+            exact (Prod.mk.inj heq).1)
+      have hgood_part := Finset.card_filter_add_card_filter_not good (s := Finset.univ)
+      rw [Finset.card_univ, Fintype.card_fin] at hgood_part
+      have hpass_ge : (1 - T.ζ) * (T.R : ℝ) ≤
+          (countPassing (fun r : Fin T.R ↦
+            (fun j ↦ concatThree (word (G.src e)) (word (G.dst e)) (aux e)
+              (T.query (cEdge e) r j)) ∈ T.testSet (cEdge e) r) : ℝ) := by
+        have hsub : (Finset.univ.filter good).card ≤
+            countPassing (fun r : Fin T.R ↦
+              (fun j ↦ concatThree (word (G.src e)) (word (G.dst e)) (aux e)
+                (T.query (cEdge e) r j)) ∈ T.testSet (cEdge e) r) :=
+          Finset.card_le_card fun r hr ↦ by
+            have hg := (Finset.mem_filter.mp hr).2
+            have hnone : G'.Satisfies B (e, r, none) :=
+              not_not.mp ((ConstraintGraph.mem_unsatEdges (G := G')).not.mp (hg none))
+            have hsome (j : Fin ℓ) : B (.inr (.inr (e, r))) j =
+                concatThree (word (G.src e)) (word (G.dst e)) (aux e)
+                  (T.query (cEdge e) r j) := by
+              have hj : G'.Satisfies B (e, r, some j) :=
+                not_not.mp ((ConstraintGraph.mem_unsatEdges (G := G')).not.mp (hg (some j)))
+              change B (.inr (.inr (e, r))) j =
+                B (composedTarget (G.src e) (G.dst e) e (T.query (cEdge e) r j)) h0 at hj
+              rw [hj]; unfold composedTarget concatThree; split_ifs <;> rfl
+            change B (.inr (.inr (e, r))) ∈ T.testSet (cEdge e) r at hnone
+            simpa only [Finset.mem_filter, Finset.mem_univ, true_and, ← funext hsome] using hnone
+        have hbad_r : ((Finset.univ.filter fun r : Fin T.R ↦ ¬ good r).card : ℝ) <
+            T.ζ * (T.R : ℝ) := lt_of_le_of_lt (by exact_mod_cast hbad_le) hlt
+        have hp_r : ((Finset.univ.filter good).card : ℝ) +
+            ((Finset.univ.filter fun r : Fin T.R ↦ ¬ good r).card : ℝ) = (T.R : ℝ) := by
+          exact_mod_cast hgood_part
+        have hsub_r := (Nat.cast_le (α := ℝ)).mpr hsub
+        linarith
+      obtain ⟨x, y, hxy, hx, hy⟩ := T.sound (cEdge e) (word (G.src e)) (word (G.dst e)) (aux e)
+        hpass_ge
+      have hcs : close (G.src e) := ⟨x, hx⟩
+      have hcd : close (G.dst e) := ⟨y, hy⟩
+      have hsx : σ (G.src e) = x := by
+        dsimp only [σ]; rw [dite_eq_left hcs]; exact T.decode_unique hcs.choose_spec hx
+      have hdy : σ (G.dst e) = y := by
+        dsimp only [σ]; rw [dite_eq_left hcd]; exact T.decode_unique hcd.choose_spec hy
+      exact (ConstraintGraph.mem_unsatEdges.mp hunsat)
+        ((hc e _ _).mpr (hsx ▸ hdy ▸ hxy))
+    have hsum : T.ζ * (T.R : ℝ) * ((G.unsatEdges σ).card : ℝ) ≤ ((G'.unsatEdges B).card : ℝ) := by
+      have h1 : ∑ _e ∈ G.unsatEdges σ, T.ζ * (T.R : ℝ) ≤
+          ∑ e : E, ((Finset.univ.filter fun ro : Fin T.R × Option (Fin ℓ) ↦
+            (e, ro.1, ro.2) ∈ G'.unsatEdges B).card : ℝ) :=
+        (Finset.sum_le_sum fun e he ↦ hedge e he).trans
+          (Finset.sum_le_univ_sum_of_nonneg fun _ ↦ Nat.cast_nonneg _)
+      have h2 : (∑ e : E, (Finset.univ.filter fun ro : Fin T.R × Option (Fin ℓ) ↦
+          (e, ro.1, ro.2) ∈ G'.unsatEdges B).card) = (G'.unsatEdges B).card := by
+        rw [← Finset.card_sigma]
+        refine Finset.card_bij (fun p _ ↦ (p.1, p.2.1, p.2.2))
+          (fun p hp ↦ (Finset.mem_filter.mp (Finset.mem_sigma.mp hp).2).2)
+          (fun p₁ _ p₂ _ h ↦ by
+            rcases p₁ with ⟨e₁, r₁, o₁⟩; rcases p₂ with ⟨e₂, r₂, o₂⟩
+            simp only [Prod.mk.injEq] at h; rcases h with ⟨rfl, rfl, rfl⟩; rfl)
+          (fun er her ↦ ⟨⟨er.1, (er.2.1, er.2.2)⟩,
+            Finset.mem_sigma.mpr ⟨Finset.mem_univ _,
+              Finset.mem_filter.mpr ⟨Finset.mem_univ _, her⟩⟩, rfl⟩)
+      rw [Finset.sum_const, nsmul_eq_mul, mul_comm] at h1
+      exact h1.trans_eq (by exact_mod_cast h2)
+    have hE_pos : (0 : ℝ) < Fintype.card E := Nat.cast_pos.mpr (Nat.pos_of_ne_zero hE0)
+    have hR_pos : (0 : ℝ) < T.R := Nat.cast_pos.mpr (lt_of_lt_of_le Nat.zero_lt_one T.hR)
+    have hℓ_pos : (0 : ℝ) < (ℓ : ℝ) + 1 := by positivity
+    refine (mul_le_mul_of_nonneg_left (unsatValRestricted_le G hσS)
+      (by have := T.hζ; positivity)).trans ?_
+    rw [ConstraintGraph.unsatFrac, ConstraintGraph.unsatFrac, card_composedEdge]
+    push_cast
+    rw [div_mul_div_comm, div_le_div_iff₀ (mul_pos hℓ_pos hE_pos)
+      (mul_pos (mul_pos hℓ_pos hR_pos) hE_pos)]
+    have := mul_le_mul_of_nonneg_right hsum (mul_pos hℓ_pos hE_pos).le
+    linarith
+
+/-- Unconditional soundness of assignment-tester composition over any non-empty alphabet:
+`(ζ / (ℓ + 1)) · UNSAT(G) ≤ UNSAT(composeGraph G cEdge T)`. -/
+theorem le_unsatVal_composeGraph {V E A Γ CIdx : Type*} [Fintype E] [Nonempty A] [Nonempty Γ]
+    {ℓ : ℕ} {evalC : CIdx → A → A → Prop} {D : Set ((Fin ℓ → Γ) → Prop)}
+    (G : ConstraintGraph V E A) (cEdge : E → CIdx)
+    (hc : ∀ (e : E) (x y : A), G.rel e x y ↔ evalC (cEdge e) x y)
+    (T : AssignmentTester A Γ CIdx evalC D) :
+    (T.ζ / ((ℓ : ℝ) + 1)) * G.unsatVal ≤ (composeGraph G cEdge T).unsatVal := by
+  have h1 : unsatValRestricted G Set.univ = G.unsatVal := by
+    unfold unsatValRestricted ConstraintGraph.unsatVal; congr 1; ext r; simp [Set.mem_range]
+  have h2 : unsatValRestricted (composeGraph G cEdge T) Set.univ =
+      (composeGraph G cEdge T).unsatVal := by
+    unfold unsatValRestricted ConstraintGraph.unsatVal; congr 1; ext r; simp [Set.mem_range]
+  have hset : {v : Fin ℓ → Γ | ∀ j, v j ∈ (Set.univ : Set Γ)} = Set.univ := by ext; simp
+  have hle := le_unsatValRestricted_composeGraph G cEdge hc T Set.univ_nonempty Set.univ_nonempty
+    fun _ _ _ _ ↦ Set.mem_univ _
+  rwa [hset, h1, h2] at hle
+
+/-- Completeness of assignment-tester composition: if `UNSAT(G) = 0`, then
+`UNSAT(composeGraph G cEdge T) = 0`. -/
+theorem composeGraph_unsatVal_eq_zero {V E A Γ CIdx : Type*} [Fintype E] [Nonempty A] [Nonempty Γ]
+    {ℓ : ℕ} {evalC : CIdx → A → A → Prop} {D : Set ((Fin ℓ → Γ) → Prop)}
+    (G : ConstraintGraph V E A) (cEdge : E → CIdx)
+    (hc : ∀ (e : E) (x y : A), G.rel e x y ↔ evalC (cEdge e) x y)
+    (T : AssignmentTester A Γ CIdx evalC D) (h0 : G.unsatVal = 0) :
+    (composeGraph G cEdge T).unsatVal = 0 := by
+  have : Nonempty (Fin ℓ → Γ) := ⟨fun _ ↦ Classical.arbitrary Γ⟩
+  obtain ⟨σ, hσ⟩ := (ConstraintGraph.unsatVal_eq_zero_iff G).mp h0
+  have haux : ∀ e : E, ∃ aux : Fin T.m → Γ, ∀ r : Fin T.R,
+      (fun j ↦ concatThree (T.encode (σ (G.src e))) (T.encode (σ (G.dst e))) aux
+        (T.query (cEdge e) r j)) ∈ T.testSet (cEdge e) r :=
+    fun e ↦ T.complete (cEdge e) _ _ ((hc e _ _).mp (hσ e))
+  choose auxFn hauxFn using haux
+  refine (ConstraintGraph.unsatVal_eq_zero_iff _).mpr ⟨fun w ↦ match w with
+    | .inl (u, i) => fun _ ↦ T.encode (σ u) i
+    | .inr (.inl (e, a)) => fun _ ↦ auxFn e a
+    | .inr (.inr (e, r)) => fun j ↦ concatThree (T.encode (σ (G.src e)))
+        (T.encode (σ (G.dst e))) (auxFn e) (T.query (cEdge e) r j), ?_⟩
+  rintro ⟨e, r, none | j⟩
+  · exact hauxFn e r
+  · dsimp only [ConstraintGraph.Satisfies, composeGraph, composedTarget, concatThree]
+    split_ifs <;> rfl
+
+end CslibFrontier.PCP
